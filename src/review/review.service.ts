@@ -304,7 +304,7 @@ export class ReviewService {
 
     return {
       ...(await this.mapNode(reply as ReviewNode)),
-      message: 'Reply submitted and awaiting moderation',
+      message: 'Reply published',
     };
   }
 
@@ -343,7 +343,7 @@ export class ReviewService {
 
     return {
       ...(await this.mapNode(updated as ReviewNode)),
-      message: 'Review updated and awaiting moderation',
+      message: 'Review updated',
     };
   }
 

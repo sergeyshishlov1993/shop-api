@@ -11,20 +11,18 @@ export class FavoriteService {
         const { page = 1, limit = 20 } = dto;
         const skip = (page - 1) * limit;
 
-        const availableVariantCondition = {
-            some: {
-                isActive: true,
-                deletedAt: null,
-                stockQty: { gt: 0 },
-            },
-        };
-
         const where: Prisma.FavoriteWhereInput = {
             userId,
             product: {
                 isActive: true,
                 deletedAt: null,
-                variants: availableVariantCondition,
+                variants: {
+                    some: {
+                        isActive: true,
+                        deletedAt: null,
+                        stockQty: { gt: 0 },
+                    },
+                },
             },
         };
 
@@ -74,12 +72,10 @@ export class FavoriteService {
             const prices = product.variants.map((v) => v.price ?? product.basePrice);
             const effectivePrice = prices.length > 0 ? Math.min(...prices) : product.basePrice;
 
-            const hasInStock = product.variants.some(
+            const availabilityStatus = product.variants.some(
                 (v) => v.stockQty - v.reservedQty > lowStockThreshold,
-            );
-            const availabilityStatus = hasInStock ? 'IN_STOCK' : 'LOW_STOCK';
-
-            const mainMedia = product.media[0] ?? null;
+            ) ? 'IN_STOCK' : 'LOW_STOCK';
+            const mainFile = product.media[0]?.file;
 
             return {
                 favoriteId: fav.id,
@@ -96,12 +92,8 @@ export class FavoriteService {
                     isHit: product.isHit,
                     isSeasonal: product.isSeasonal,
                     category: product.category,
-                    mainMedia: mainMedia?.file
-                        ? {
-                            id: mainMedia.file!.id,
-                            url: mainMedia.file!.s3Key,
-                            alt: mainMedia.file!.originalName,
-                        }
+                    mainMedia: mainFile
+                        ? { id: mainFile.id, url: mainFile.s3Key, alt: mainFile.originalName }
                         : null,
                     averageRating: ratings.get(product.id)?.avg ?? 0,
                     reviewCount: ratings.get(product.id)?.count ?? 0,
@@ -135,10 +127,7 @@ export class FavoriteService {
             throw new ConflictException('Product already in favorites');
         }
 
-        const favorite = await this.prisma.favorite.create({
-            data: { userId, productId },
-        });
-
+        const favorite = await this.prisma.favorite.create({ data: { userId, productId } });
         return { favoriteId: favorite.id, productId };
     }
 
@@ -260,14 +249,7 @@ export class FavoriteService {
             );
         }
 
-        const allProducts = [
-            ...sameCategoryAndBrand,
-            ...sameCategory,
-            ...sameType,
-            ...popular,
-        ];
-
-        return this.mapProductCards(allProducts);
+        return this.mapProductCards([...sameCategoryAndBrand, ...sameCategory, ...sameType, ...popular]);
     }
 
     private async findProducts(where: Prisma.ProductWhereInput, take: number) {
@@ -305,7 +287,7 @@ export class FavoriteService {
     }
 
     private async getPopularProducts(excludeIds: number[], take: number) {
-        const where: Prisma.ProductWhereInput = {
+        return this.findProducts({
             ...(excludeIds.length > 0 ? { id: { notIn: excludeIds } } : {}),
             isActive: true,
             deletedAt: null,
@@ -317,9 +299,7 @@ export class FavoriteService {
                 },
             },
             OR: [{ isHit: true }, { isNew: true }],
-        };
-
-        return this.findProducts(where, take);
+        }, take);
     }
 
     private async mapProductCards(products: Awaited<ReturnType<typeof this.findProducts>>) {
@@ -331,12 +311,10 @@ export class FavoriteService {
             const prices = product.variants.map((v) => v.price ?? product.basePrice);
             const effectivePrice = prices.length > 0 ? Math.min(...prices) : product.basePrice;
 
-            const hasInStock = product.variants.some(
+            const availabilityStatus = product.variants.some(
                 (v) => v.stockQty - v.reservedQty > lowStockThreshold,
-            );
-            const availabilityStatus = hasInStock ? 'IN_STOCK' : 'LOW_STOCK';
-
-            const mainMedia = product.media[0] ?? null;
+            ) ? 'IN_STOCK' : 'LOW_STOCK';
+            const mainFile = product.media[0]?.file;
 
             return {
                 id: product.id,
@@ -350,12 +328,8 @@ export class FavoriteService {
                 isHit: product.isHit,
                 isSeasonal: product.isSeasonal,
                 category: product.category,
-                mainMedia: mainMedia?.file
-                    ? {
-                        id: mainMedia.file!.id,
-                        url: mainMedia.file!.s3Key,
-                        alt: mainMedia.file!.originalName,
-                    }
+                mainMedia: mainFile
+                    ? { id: mainFile.id, url: mainFile.s3Key, alt: mainFile.originalName }
                     : null,
                 averageRating: ratings.get(product.id)?.avg ?? 0,
                 reviewCount: ratings.get(product.id)?.count ?? 0,

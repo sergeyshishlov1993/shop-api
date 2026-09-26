@@ -24,11 +24,6 @@ export class ReportService {
     const dateFromParsed = new Date(dateFrom);
     const dateToParsed = new Date(dateTo);
 
-    const orderWhere: Prisma.OrderWhereInput = {
-      status: { in: orderStatuses },
-      createdAt: { gte: dateFromParsed, lte: dateToParsed },
-    };
-
     const orderItemWhere: Prisma.OrderItemWhereInput = {};
     const hasItemFilters = !!(productType || categoryId || productId);
 
@@ -46,7 +41,7 @@ export class ReportService {
     }
 
     const orders = await this.prisma.order.findMany({
-      where: orderWhere,
+      where: { status: { in: orderStatuses }, createdAt: { gte: dateFromParsed, lte: dateToParsed } },
       include: {
         items: {
           ...(hasItemFilters ? { where: orderItemWhere } : {}),
@@ -79,13 +74,12 @@ export class ReportService {
         revenue += item.lineRevenue;
         costOfGoods += item.lineCost;
 
-        const key = item.productName;
-        const existing = productAggregation.get(key);
+        const existing = productAggregation.get(item.productName);
         if (existing) {
           existing.revenue += item.lineRevenue;
           existing.quantity += item.quantity;
         } else {
-          productAggregation.set(key, {
+          productAggregation.set(item.productName, {
             productName: item.productName,
             revenue: item.lineRevenue,
             quantity: item.quantity,
@@ -107,24 +101,21 @@ export class ReportService {
     const netProfit = grossProfit - expenses;
 
     const ordersCount = filteredOrders.length;
-    const averageOrderValue =
-      ordersCount > 0 ? Math.round((revenue / ordersCount) * 100) / 100 : 0;
-
     const topProducts = Array.from(productAggregation.values())
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 
     return {
-      revenue: Math.round(revenue * 100) / 100,
-      costOfGoods: Math.round(costOfGoods * 100) / 100,
-      grossProfit: Math.round(grossProfit * 100) / 100,
-      expenses: Math.round(expenses * 100) / 100,
-      netProfit: Math.round(netProfit * 100) / 100,
+      revenue: r2(revenue),
+      costOfGoods: r2(costOfGoods),
+      grossProfit: r2(grossProfit),
+      expenses: r2(expenses),
+      netProfit: r2(netProfit),
       ordersCount,
-      averageOrderValue,
+      averageOrderValue: ordersCount > 0 ? r2(revenue / ordersCount) : 0,
       topProducts: topProducts.map((product) => ({
         productName: product.productName,
-        revenue: Math.round(product.revenue * 100) / 100,
+        revenue: r2(product.revenue),
         quantity: product.quantity,
       })),
     };

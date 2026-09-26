@@ -10,14 +10,8 @@ export class PagesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getAdminPages(query: GetAdminPagesQueryDto) {
-    const where: Prisma.PageContentWhereInput = {};
-
-    if (query.isActive !== undefined) {
-      where.isActive = query.isActive;
-    }
-
     return this.prisma.pageContent.findMany({
-      where,
+      where: { isActive: query.isActive },
       orderBy: { slug: 'asc' },
     });
   }
@@ -58,17 +52,15 @@ export class PagesService {
   async updatePage(slug: string, dto: UpdatePageDto) {
     await this.getAdminPageBySlug(slug);
 
-    const data: Prisma.PageContentUpdateInput = {};
-
-    if (dto.title !== undefined) data.title = dto.title;
-    if (dto.contentJson !== undefined) data.contentJson = dto.contentJson;
-    if (dto.metaTitle !== undefined) data.metaTitle = dto.metaTitle;
-    if (dto.metaDescription !== undefined) data.metaDescription = dto.metaDescription;
-    if (dto.isActive !== undefined) data.isActive = dto.isActive;
-
     return this.prisma.pageContent.update({
       where: { slug },
-      data,
+      data: {
+        title: dto.title,
+        contentJson: dto.contentJson,
+        metaTitle: dto.metaTitle,
+        metaDescription: dto.metaDescription,
+        isActive: dto.isActive,
+      },
     });
   }
 

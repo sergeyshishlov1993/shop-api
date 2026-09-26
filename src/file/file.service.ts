@@ -48,13 +48,8 @@ export class FileService {
   }
 
   async delete(fileId: number): Promise<void> {
-    const fileAsset = await this.prisma.fileAsset.findUnique({
-      where: { id: fileId },
-    });
-
-    if (!fileAsset) {
-      throw new NotFoundException('File not found');
-    }
+    const fileAsset = await this.prisma.fileAsset.findUnique({ where: { id: fileId } });
+    if (!fileAsset) throw new NotFoundException('File not found');
 
     const keysToDelete: string[] = [];
 
@@ -106,14 +101,8 @@ export class FileService {
         .toBuffer();
 
       const key = this.s3Service.buildKey('images', assetId, size.name);
-      const url = await this.s3Service.upload({
-        key,
-        body: buffer,
-        contentType: 'image/webp',
-      });
-
       keys[size.name] = key;
-      urls[size.name] = url;
+      urls[size.name] = await this.s3Service.upload({ key, body: buffer, contentType: 'image/webp' });
     }
 
     const fileAsset = await this.prisma.fileAsset.create({
@@ -141,8 +130,7 @@ export class FileService {
       throw new BadRequestException('Video size exceeds 50MB limit');
     }
 
-    const tempId = randomUUID();
-    const tempDir = path.join(os.tmpdir(), `upload-${tempId}`);
+    const tempDir = path.join(os.tmpdir(), `upload-${randomUUID()}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
     const inputPath = path.join(tempDir, `input${this.getExtension(file.mimetype)}`);
@@ -167,14 +155,8 @@ export class FileService {
           .toBuffer();
 
         const key = this.s3Service.buildKey('previews', previewUuid, size.name);
-        const url = await this.s3Service.upload({
-          key,
-          body: buffer,
-          contentType: 'image/webp',
-        });
-
         previewKeys[size.name] = key;
-        previewUrls[size.name] = url;
+        previewUrls[size.name] = await this.s3Service.upload({ key, body: buffer, contentType: 'image/webp' });
       }
 
       const previewAsset = await this.prisma.fileAsset.create({
@@ -256,10 +238,6 @@ export class FileService {
   }
 
   private getExtension(mimeType: string): string {
-    const map: Record<string, string> = {
-      'video/mp4': '.mp4',
-      'video/quicktime': '.mov',
-    };
-    return map[mimeType] ?? '.mp4';
+    return mimeType === 'video/quicktime' ? '.mov' : '.mp4';
   }
 }

@@ -25,9 +25,8 @@ export class LabelService {
   async renderLabels(items: LabelRequestItem[]): Promise<string> {
     if (!items?.length) throw new BadRequestException('Не вибрано жодного варіанту.');
 
-    const ids = items.map((i) => i.variantId);
     const variants = await this.prisma.productVariant.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: items.map((i) => i.variantId) } },
       select: {
         id: true, sku: true, barcode: true, price: true,
         product: {
@@ -67,9 +66,8 @@ export class LabelService {
         v.product.material && `Матеріал: ${v.product.material}`,
         v.product.season && `Сезон: ${v.product.season}`,
       ].filter(Boolean).join(' · ');
-      const imageKey = v.product.media[0]?.file?.s3KeyMedium
-        ?? v.product.media[0]?.file?.s3KeyLarge
-        ?? v.product.media[0]?.file?.s3Key;
+      const file = v.product.media[0]?.file;
+      const imageKey = file?.s3KeyMedium ?? file?.s3KeyLarge ?? file?.s3Key;
       const imageUrl = imageKey ? this.s3Service.getPublicUrl(imageKey) : '';
 
       const cell = `

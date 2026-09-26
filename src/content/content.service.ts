@@ -99,11 +99,8 @@ export class ContentService {
   async updateHeroSlide(id: number, dto: UpdateHeroSlideDto) {
     const heroSlide = await this.findHeroSlideByIdOrThrow(id);
 
-    const mediaFileId = dto.mediaFileId ?? heroSlide.mediaFileId;
-    const mediaType = dto.mediaType ?? heroSlide.mediaType;
-
     if (dto.mediaFileId !== undefined || dto.mediaType !== undefined) {
-      await this.validateHeroSlideMedia(mediaFileId, mediaType);
+      await this.validateHeroSlideMedia(dto.mediaFileId ?? heroSlide.mediaFileId, dto.mediaType ?? heroSlide.mediaType);
     }
 
     return this.prisma.heroSlide.update({
@@ -173,9 +170,7 @@ export class ContentService {
       throw new BadRequestException('Media file not found');
     }
 
-    const expectedFileType = mediaType === MediaType.IMAGE ? FileType.IMAGE : FileType.VIDEO;
-
-    if (fileAsset.fileType !== expectedFileType) {
+    if (fileAsset.fileType !== (mediaType === MediaType.IMAGE ? FileType.IMAGE : FileType.VIDEO)) {
       throw new BadRequestException('Media type does not match file type');
     }
   }

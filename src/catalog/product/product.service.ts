@@ -19,8 +19,6 @@ export class ProductService {
     async findAll(query: QueryProductDto) {
         const page = query.page ?? 1;
         const limit = query.limit ?? 20;
-        const skip = (page - 1) * limit;
-
         const where = this.buildWhereClause(query);
         const orderBy = this.buildOrderBy(query.sort, query.order);
 
@@ -28,7 +26,7 @@ export class ProductService {
             this.prisma.product.findMany({
                 where,
                 orderBy,
-                skip,
+                skip: (page - 1) * limit,
                 take: limit,
                 include: {
                     category: { select: { id: true, name: true, slug: true } },
@@ -140,9 +138,7 @@ export class ProductService {
         }
 
         if (dto.categoryId !== undefined || dto.productType !== undefined) {
-            const categoryId = dto.categoryId ?? existing.categoryId;
-            const productType = dto.productType ?? existing.productType;
-            await this.validateCategory(categoryId, productType);
+            await this.validateCategory(dto.categoryId ?? existing.categoryId, dto.productType ?? existing.productType);
         }
 
         if (dto.hoverVideoFileId !== undefined && dto.hoverVideoFileId !== null) {
@@ -241,7 +237,6 @@ export class ProductService {
         order?: 'asc' | 'desc',
     ): Prisma.ProductOrderByWithRelationInput {
         const direction = order ?? 'desc';
-
         switch (sort) {
             case 'name':
                 return { name: direction };

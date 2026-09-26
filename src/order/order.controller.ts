@@ -98,14 +98,7 @@ export class OrderController {
         ? req.cookies.cartSessionId
         : null;
 
-    const result = await this.orderService.createOrder(
-      {
-        userId,
-        sessionId,
-      },
-      dto,
-      idempotencyKey ?? null,
-    );
+    const result = await this.orderService.createOrder({ userId, sessionId }, dto, idempotencyKey ?? null);
 
     if (result.isIdempotentReplay) {
       res.status(HttpStatus.OK);

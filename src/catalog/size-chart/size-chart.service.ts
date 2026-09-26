@@ -26,26 +26,13 @@ export class SizeChartService {
     async findByCategoryId(categoryId: number) {
         await this.ensureCategoryExists(categoryId);
 
-        const sizeChart = await this.prisma.sizeChart.findUnique({
-            where: { categoryId },
-        });
-
-        if (!sizeChart) {
-            throw new NotFoundException(
-                `Size chart for category ${categoryId} not found`,
-            );
-        }
-
+        const sizeChart = await this.prisma.sizeChart.findUnique({ where: { categoryId } });
+        if (!sizeChart) throw new NotFoundException(`Size chart for category ${categoryId} not found`);
         return sizeChart;
     }
 
     private async ensureCategoryExists(categoryId: number) {
-        const category = await this.prisma.category.findFirst({
-            where: { id: categoryId, deletedAt: null },
-        });
-
-        if (!category) {
-            throw new NotFoundException(`Category with id ${categoryId} not found`);
-        }
+        const category = await this.prisma.category.findFirst({ where: { id: categoryId, deletedAt: null } });
+        if (!category) throw new NotFoundException(`Category with id ${categoryId} not found`);
     }
 }

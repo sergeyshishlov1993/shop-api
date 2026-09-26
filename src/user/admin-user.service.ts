@@ -23,11 +23,10 @@ export class AdminUserService {
           }
         : {}),
     };
-    const skip = (query.page - 1) * query.limit;
     const [users, totalCount] = await this.prisma.$transaction([
       this.prisma.user.findMany({
         where,
-        skip,
+        skip: (query.page - 1) * query.limit,
         take: query.limit,
         orderBy: { createdAt: 'desc' },
         include: { orders: { select: { totalAmount: true } } },
@@ -83,8 +82,7 @@ export class AdminUserService {
     if (id === currentUserId && dto.role && dto.role !== UserRole.ADMIN) {
       throw new BadRequestException('You cannot remove your own administrator role');
     }
-    const updated = await this.prisma.user.update({ where: { id }, data: dto as Record<string, unknown> });
-    const { passwordHash, ...result } = updated;
+    const { passwordHash, ...result } = await this.prisma.user.update({ where: { id }, data: dto as Record<string, unknown> });
     return result;
   }
 }

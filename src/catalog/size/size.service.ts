@@ -44,9 +44,7 @@ export class SizeService {
 
   private async findByIdOrThrow(id: number) {
     const size = await this.prisma.size.findUnique({ where: { id } });
-    if (!size) {
-      throw new NotFoundException(`Size with id ${id} not found`);
-    }
+    if (!size) throw new NotFoundException(`Size with id ${id} not found`);
     return size;
   }
 }

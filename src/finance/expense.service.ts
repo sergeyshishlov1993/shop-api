@@ -62,17 +62,15 @@ export class ExpenseService {
   async update(expenseId: number, dto: UpdateExpenseDto) {
     await this.findOneOrFail(expenseId);
 
-    const data: Prisma.ExpenseUpdateInput = {};
-
-    if (dto.title !== undefined) data.title = dto.title;
-    if (dto.type !== undefined) data.type = dto.type;
-    if (dto.amount !== undefined) data.amount = dto.amount;
-    if (dto.expenseDate !== undefined) data.expenseDate = new Date(dto.expenseDate);
-    if (dto.note !== undefined) data.note = dto.note;
-
     return this.prisma.expense.update({
       where: { id: expenseId },
-      data,
+      data: {
+        title: dto.title,
+        type: dto.type,
+        amount: dto.amount,
+        expenseDate: dto.expenseDate !== undefined ? new Date(dto.expenseDate) : undefined,
+        note: dto.note,
+      },
     });
   }
 

@@ -18,23 +18,14 @@ export class CartService {
     userId?: number | null;
     sessionId?: string | null;
   }): CartOwner {
-    const userId = params.userId ?? null;
-    const sessionId = params.sessionId ?? null;
+    const { userId, sessionId } = params;
 
     if (userId) {
-      return {
-        userId,
-        sessionId: null,
-        isGuest: false,
-      };
+      return { userId, sessionId: null, isGuest: false };
     }
 
     if (sessionId) {
-      return {
-        userId: null,
-        sessionId,
-        isGuest: true,
-      };
+      return { userId: null, sessionId, isGuest: true };
     }
 
     throw new UnauthorizedException('Cart owner could not be resolved');
@@ -44,13 +35,12 @@ export class CartService {
     userId: number;
     sessionId?: string | null;
   }): Promise<void> {
-    const sessionId = params.sessionId ?? null;
-    if (!sessionId) {
+    if (!params.sessionId) {
       return;
     }
 
     const guestCart = await this.prisma.cart.findUnique({
-      where: { sessionId },
+      where: { sessionId: params.sessionId },
       include: {
         items: true,
       },
@@ -111,26 +101,22 @@ export class CartService {
       }
 
       if (existingUserItem) {
-        const mergedQty = Math.min(
-          Math.max(existingUserItem.quantity, guestItem.quantity),
-          availableQty,
-        );
-
         await this.prisma.cartItem.update({
           where: { id: existingUserItem.id },
           data: {
-            quantity: mergedQty,
+            quantity: Math.min(
+              Math.max(existingUserItem.quantity, guestItem.quantity),
+              availableQty,
+            ),
             unitPriceSnapshot: currentPrice,
           },
         });
       } else {
-        const nextQty = Math.min(guestItem.quantity, availableQty);
-
         await this.prisma.cartItem.create({
           data: {
             cartId: userCart.id,
             productVariantId: guestItem.productVariantId,
-            quantity: nextQty,
+            quantity: Math.min(guestItem.quantity, availableQty),
             unitPriceSnapshot: currentPrice,
           },
         });
@@ -206,8 +192,6 @@ export class CartService {
       const product = variant.product;
       const availableQty = Math.max(variant.stockQty - variant.reservedQty, 0);
       const currentUnitPrice = variant.price ?? product.basePrice;
-      const availabilityStatus =
-        availableQty > LOW_STOCK_THRESHOLD ? 'IN_STOCK' : 'LOW_STOCK';
 
       return {
         id: item.id,
@@ -215,7 +199,8 @@ export class CartService {
         unitPriceSnapshot: item.unitPriceSnapshot,
         currentUnitPrice,
         lineTotal: item.quantity * currentUnitPrice,
-        availabilityStatus,
+        availabilityStatus:
+          availableQty > LOW_STOCK_THRESHOLD ? 'IN_STOCK' : 'LOW_STOCK',
         availableQty,
         variant: {
           id: variant.id,
@@ -254,15 +239,13 @@ export class CartService {
       };
     });
 
-    const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
-
     return {
       id: cartWithItems.id,
       userId: cartWithItems.userId,
       sessionId: cartWithItems.sessionId,
       items,
       totalItems: items.reduce((sum, item) => sum + item.quantity, 0),
-      subtotal,
+      subtotal: items.reduce((sum, item) => sum + item.lineTotal, 0),
     };
   }
 
@@ -350,19 +333,15 @@ export class CartService {
       throw new BadRequestException('Product is unavailable');
     }
 
-    const availableQty = variant.stockQty - variant.reservedQty;
-
-    if (dto.quantity > availableQty) {
+    if (dto.quantity > variant.stockQty - variant.reservedQty) {
       throw new BadRequestException('Requested quantity exceeds available stock');
     }
-
-    const currentPrice = variant.price ?? product.basePrice;
 
     await this.prisma.cartItem.update({
       where: { id: item.id },
       data: {
         quantity: dto.quantity,
-        unitPriceSnapshot: currentPrice,
+        unitPriceSnapshot: variant.price ?? product.basePrice,
       },
     });
 
@@ -384,9 +363,7 @@ export class CartService {
       throw new NotFoundException('Cart item not found');
     }
 
-    await this.prisma.cartItem.delete({
-      where: { id: item.id },
-    });
+    await this.prisma.cartItem.delete({ where: { id: item.id } });
 
     return this.getCart(owner);
   }
@@ -397,15 +374,7 @@ export class CartService {
         where: { userId: owner.userId },
       });
 
-      if (existing) {
-        return existing;
-      }
-
-      return this.prisma.cart.create({
-        data: {
-          userId: owner.userId,
-        },
-      });
+      return existing ?? this.prisma.cart.create({ data: { userId: owner.userId } });
     }
 
     if (owner.sessionId) {
@@ -413,15 +382,7 @@ export class CartService {
         where: { sessionId: owner.sessionId },
       });
 
-      if (existing) {
-        return existing;
-      }
-
-      return this.prisma.cart.create({
-        data: {
-          sessionId: owner.sessionId,
-        },
-      });
+      return existing ?? this.prisma.cart.create({ data: { sessionId: owner.sessionId } });
     }
 
     throw new UnauthorizedException('Cart owner could not be resolved');
@@ -447,9 +408,7 @@ export class CartService {
       throw new NotFoundException('Product variant not found');
     }
 
-    const availableQty = variant.stockQty - variant.reservedQty;
-
-    if (availableQty <= 0) {
+    if (variant.stockQty - variant.reservedQty <= 0) {
       throw new BadRequestException('Product variant is out of stock');
     }
 

@@ -443,8 +443,7 @@ export class ReturnsService {
       _sum: { quantity: true },
     });
     const refundedMap = new Map(refunded.map((r) => [r.orderItemId, r._sum.quantity ?? 0]));
-    const fullyReturned = order.items.every((i) => (refundedMap.get(i.id) ?? 0) >= i.quantity);
-    if (!fullyReturned) return;
+    if (!order.items.every((i) => (refundedMap.get(i.id) ?? 0) >= i.quantity)) return;
 
     await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.RETURNED } });
     await tx.orderStatusHistory.create({
@@ -491,9 +490,7 @@ export class ReturnsService {
       try {
         return await create(`${prefix}${`${sequence}`.padStart(4, '0')}`);
       } catch (error) {
-        const isUniqueConflict =
-          error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-        if (!isUniqueConflict) throw error;
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) throw error;
       }
     }
     throw new BadRequestException('Не вдалося згенерувати номер заявки, спробуйте ще раз');

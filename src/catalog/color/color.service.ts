@@ -42,9 +42,7 @@ export class ColorService {
 
   private async findByIdOrThrow(id: number) {
     const color = await this.prisma.color.findUnique({ where: { id } });
-    if (!color) {
-      throw new NotFoundException(`Color with id ${id} not found`);
-    }
+    if (!color) throw new NotFoundException(`Color with id ${id} not found`);
     return color;
   }
 }

@@ -94,7 +94,6 @@ export class ReviewService {
     userId?: number,
   ): Promise<ReviewsResponse> {
     const { page = 1, limit = 10, sort = 'newest', filter = 'all' } = dto;
-    const offset = (page - 1) * limit;
 
     const product = await this.prisma.product.findFirst({
       where: {
@@ -134,7 +133,7 @@ export class ReviewService {
     const rootReviews = await this.prisma.review.findMany({
       where: listWhere,
       orderBy: SORT_ORDER[sort],
-      skip: offset,
+      skip: (page - 1) * limit,
       take: limit,
       include: {
         ...nodeInclude(userId),
@@ -414,19 +413,10 @@ export class ReviewService {
   }
 
   async getAdminReviews(query: AdminReviewQueryDto) {
-    const where: {
-      status?: ReviewStatus;
-      productId?: number;
-    } = {};
-
-    if (query.status) {
-      where.status = query.status;
-    }
-
-    if (query.productId) {
-      where.productId = query.productId;
-    }
-
+    const where: Prisma.ReviewWhereInput = {
+      ...(query.status && { status: query.status }),
+      ...(query.productId && { productId: query.productId }),
+    };
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -476,13 +466,8 @@ export class ReviewService {
   }
 
   async updateReviewStatus(id: number, dto: UpdateReviewStatusDto) {
-    const review = await this.prisma.review.findUnique({
-      where: { id },
-    });
-
-    if (!review) {
-      throw new NotFoundException('Review not found');
-    }
+    const review = await this.prisma.review.findUnique({ where: { id } });
+    if (!review) throw new NotFoundException('Review not found');
 
     return this.prisma.review.update({
       where: { id },
@@ -575,24 +560,17 @@ export class ReviewService {
   }
 
   private async mapUserInfo(user: UserWithAvatar): Promise<ReviewUserInfo> {
-    let avatar: ReviewUserInfo['avatar'] = null;
-
-    if (user.avatarFile) {
-      avatar = {
-        thumb: user.avatarFile.s3KeyThumb
-          ? await this.s3Service.getSignedUrl(user.avatarFile.s3KeyThumb)
-          : null,
-        medium: user.avatarFile.s3KeyMedium
-          ? await this.s3Service.getSignedUrl(user.avatarFile.s3KeyMedium)
-          : null,
-      };
-    }
-
+    const { avatarFile } = user;
     return {
       id: user.id,
       firstName: user.firstName,
       lastName: user.lastName,
-      avatar,
+      avatar: avatarFile
+        ? {
+            thumb: avatarFile.s3KeyThumb ? await this.s3Service.getSignedUrl(avatarFile.s3KeyThumb) : null,
+            medium: avatarFile.s3KeyMedium ? await this.s3Service.getSignedUrl(avatarFile.s3KeyMedium) : null,
+          }
+        : null,
     };
   }
 

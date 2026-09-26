@@ -8,8 +8,7 @@ export class CacheService {
 
   async get<T>(key: string): Promise<T | null> {
     const data = await this.redis.get(key);
-    if (!data) return null;
-    return JSON.parse(data) as T;
+    return data ? (JSON.parse(data) as T) : null;
   }
 
   async set(key: string, value: unknown, ttlSeconds: number): Promise<void> {

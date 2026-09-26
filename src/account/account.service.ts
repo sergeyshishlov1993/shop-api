@@ -17,23 +17,20 @@ export class AccountService {
   ) {}
 
   async getProfile(userId: number) {
-    const user = await this.prisma.user.findUniqueOrThrow({
+    const { passwordHash, ...profile } = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
       include: { avatarFile: true },
     });
-
-    const { passwordHash, ...profile } = user;
     return profile;
   }
 
   async updateProfile(userId: number, dto: UpdateProfileDto) {
-    const user = await this.prisma.user.update({
+    const { passwordHash, ...profile } = await this.prisma.user.update({
       where: { id: userId },
       data: dto,
       include: { avatarFile: true },
     });
 
-    const { passwordHash, ...profile } = user;
     return profile;
   }
 
@@ -95,16 +92,13 @@ export class AccountService {
       throw new UnauthorizedException('Account has no password set');
     }
 
-    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isValid) {
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
-    const newHash = await bcrypt.hash(newPassword, 10);
-
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: newHash },
+      data: { passwordHash: await bcrypt.hash(newPassword, 10) },
     });
 
     const sessions = await this.prisma.refreshSession.findMany({
@@ -115,8 +109,7 @@ export class AccountService {
 
     if (currentRefreshToken) {
       for (const session of sessions) {
-        const isMatch = await bcrypt.compare(currentRefreshToken, session.tokenHash);
-        if (isMatch) {
+        if (await bcrypt.compare(currentRefreshToken, session.tokenHash)) {
           currentSessionId = session.id;
           break;
         }
@@ -139,13 +132,12 @@ export class AccountService {
 
   async getOrders(userId: number, query: GetAccountOrdersQueryDto) {
     const where = this.buildOrdersWhere(userId, query);
-    const skip = (query.page - 1) * query.limit;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip,
+        skip: (query.page - 1) * query.limit,
         take: query.limit,
         select: {
           id: true,
@@ -167,9 +159,7 @@ export class AccountService {
           },
         },
       }),
-      this.prisma.order.count({
-        where,
-      }),
+      this.prisma.order.count({ where }),
     ]);
 
     const images = await loadVariantImages(
@@ -395,10 +385,7 @@ export class AccountService {
 
     await this.cartService.getCart(owner);
 
-    return {
-      added,
-      skipped,
-    };
+    return { added, skipped };
   }
 
 

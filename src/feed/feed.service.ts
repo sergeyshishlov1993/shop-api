@@ -23,8 +23,7 @@ function xmlEscape(value: string): string {
 }
 
 function csvEscape(value: string): string {
-  const v = value.replace(/"/g, '""');
-  return `"${v}"`;
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 @Injectable()
@@ -87,8 +86,7 @@ export class FeedService {
 
   /** Google Merchant (Google Shopping) — RSS 2.0. */
   async googleXml(): Promise<string> {
-    const items = await this.buildItems();
-    const body = items
+    const body = (await this.buildItems())
       .map(
         (i) => `    <item>
       <g:id>${xmlEscape(i.id)}</g:id>

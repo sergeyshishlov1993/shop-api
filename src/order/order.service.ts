@@ -47,11 +47,6 @@ type DeliverySnapshot = {
     deliveryComment: string | null;
 };
 
-type StatusTransitionRule = {
-    allowedNextStatuses: OrderStatus[];
-    adjustInventory: boolean;
-};
-
 type LowStockNotificationItem = {
     productName: string;
     sku: string;
@@ -250,21 +245,7 @@ export class OrderService {
                     idempotencyKey,
                     couponCode: appliedCouponCode,
                     items: {
-                        create: validatedItems.map((item) => ({
-                            productVariantId: item.productVariantId,
-                            productName: item.productName,
-                            categoryName: item.categoryName,
-                            productType: item.productType,
-                            sku: item.sku,
-                            sizeName: item.sizeName,
-                            colorName: item.colorName,
-                            salePrice: item.salePrice,
-                            purchaseCost: item.purchaseCost,
-                            quantity: item.quantity,
-                            lineRevenue: item.lineRevenue,
-                            lineCost: item.lineCost,
-                            lineProfit: item.lineProfit,
-                        })),
+                        create: validatedItems,
                     },
                     statusHistory: {
                         create: {
@@ -313,13 +294,7 @@ export class OrderService {
             return createdOrder;
         });
 
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
-        const normalizedFrontendUrl = frontendUrl.endsWith('/')
-            ? frontendUrl.slice(0, -1)
-            : frontendUrl;
-        const adminLink = normalizedFrontendUrl
-            ? `${normalizedFrontendUrl}/admin/orders/${order.id}`
-            : `/admin/orders/${order.id}`;
+        const frontendUrl = (this.configService.get<string>('FRONTEND_URL') ?? '').replace(/\/$/, '');
         const deliveryParts = [
             order.deliveryProvider,
             order.city,
@@ -334,7 +309,7 @@ export class OrderService {
             client: order.customerName,
             phone: order.customerPhone,
             delivery: deliveryParts.join(', ') || '-',
-            adminLink,
+            adminLink: `${frontendUrl}/admin/orders/${order.id}`,
         });
 
         if (order.customerEmail) {
@@ -429,32 +404,18 @@ export class OrderService {
             };
         }
 
-        let createdAtFilter: Prisma.DateTimeFilter | undefined;
-
-        if (query.dateFrom) {
-            const dateFrom = new Date(query.dateFrom);
-            if (Number.isNaN(dateFrom.getTime())) {
-                throw new BadRequestException('Invalid dateFrom');
-            }
-            createdAtFilter = {
-                ...(createdAtFilter ?? {}),
-                gte: dateFrom,
-            };
+        const dateFrom = query.dateFrom ? new Date(query.dateFrom) : undefined;
+        if (dateFrom && Number.isNaN(dateFrom.getTime())) {
+            throw new BadRequestException('Invalid dateFrom');
         }
 
-        if (query.dateTo) {
-            const dateTo = new Date(query.dateTo);
-            if (Number.isNaN(dateTo.getTime())) {
-                throw new BadRequestException('Invalid dateTo');
-            }
-            createdAtFilter = {
-                ...(createdAtFilter ?? {}),
-                lte: dateTo,
-            };
+        const dateTo = query.dateTo ? new Date(query.dateTo) : undefined;
+        if (dateTo && Number.isNaN(dateTo.getTime())) {
+            throw new BadRequestException('Invalid dateTo');
         }
 
-        if (createdAtFilter) {
-            where.createdAt = createdAtFilter;
+        if (dateFrom || dateTo) {
+            where.createdAt = { gte: dateFrom, lte: dateTo };
         }
 
         const [items, total] = await this.prisma.$transaction([
@@ -684,9 +645,7 @@ export class OrderService {
             await this.telegramService.sendLowStockNotification(notification);
         }
 
-        const stockStatuses: OrderStatus[] = [OrderStatus.DELIVERED, OrderStatus.CANCELLED, OrderStatus.RETURNED];
-        const stockChanged = stockStatuses.includes(dto.newStatus);
-        if (stockChanged) {
+        if (([OrderStatus.DELIVERED, OrderStatus.CANCELLED, OrderStatus.RETURNED] as OrderStatus[]).includes(dto.newStatus)) {
             await this.cacheService.invalidateProduct();
         }
 
@@ -888,36 +847,16 @@ export class OrderService {
     }
 
     private assertStatusTransition(currentStatus: OrderStatus, nextStatus: OrderStatus) {
-        const transitions: Record<OrderStatus, StatusTransitionRule> = {
-            [OrderStatus.NEW]: {
-                allowedNextStatuses: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
-                adjustInventory: false,
-            },
-            [OrderStatus.PROCESSING]: {
-                allowedNextStatuses: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
-                adjustInventory: false,
-            },
-            [OrderStatus.SHIPPED]: {
-                allowedNextStatuses: [OrderStatus.DELIVERED, OrderStatus.RETURNED],
-                adjustInventory: true,
-            },
-            [OrderStatus.DELIVERED]: {
-                allowedNextStatuses: [OrderStatus.RETURNED],
-                adjustInventory: true,
-            },
-            [OrderStatus.CANCELLED]: {
-                allowedNextStatuses: [],
-                adjustInventory: false,
-            },
-            [OrderStatus.RETURNED]: {
-                allowedNextStatuses: [],
-                adjustInventory: false,
-            },
+        const transitions: Record<OrderStatus, OrderStatus[]> = {
+            [OrderStatus.NEW]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
+            [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+            [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED, OrderStatus.RETURNED],
+            [OrderStatus.DELIVERED]: [OrderStatus.RETURNED],
+            [OrderStatus.CANCELLED]: [],
+            [OrderStatus.RETURNED]: [],
         };
 
-        const rule = transitions[currentStatus];
-
-        if (!rule.allowedNextStatuses.includes(nextStatus)) {
+        if (!transitions[currentStatus].includes(nextStatus)) {
             throw new BadRequestException(
                 `Invalid status transition from ${currentStatus} to ${nextStatus}`,
             );

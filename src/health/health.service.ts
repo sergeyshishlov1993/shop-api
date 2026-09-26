@@ -29,10 +29,8 @@ export class HealthService {
       this.checkS3(),
     ]);
 
-    const status = db === 'up' && redis === 'up' && s3 === 'up' ? 'ok' : 'error';
-
     return {
-      status,
+      status: db === 'up' && redis === 'up' && s3 === 'up' ? 'ok' : 'error',
       db,
       redis,
       s3,
@@ -62,9 +60,7 @@ export class HealthService {
       const client = this.s3Service['client'] as {
         send(command: HeadBucketCommand): Promise<unknown>;
       };
-      const bucket = this.s3Service['bucket'] as string;
-
-      await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      await client.send(new HeadBucketCommand({ Bucket: this.s3Service['bucket'] as string }));
       return 'up';
     } catch {
       return 'down';

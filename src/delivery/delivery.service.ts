@@ -49,20 +49,18 @@ export class DeliveryService {
     }
 
     async searchCities(search: string): Promise<SelectOption[]> {
-        const body = {
-            apiKey: await this.getApiKey(),
-            modelName: 'Address',
-            calledMethod: 'getCities',
-            methodProperties: {
-                FindByString: search,
-                Limit: '20',
-            },
-        };
-
         const response = await fetch(this.apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify({
+                apiKey: await this.getApiKey(),
+                modelName: 'Address',
+                calledMethod: 'getCities',
+                methodProperties: {
+                    FindByString: search,
+                    Limit: '20',
+                },
+            }),
         });
 
         const result: NovaPoshtaResponse = await response.json();
@@ -76,21 +74,19 @@ export class DeliveryService {
     }
 
     async searchWarehouses(city: string, search?: string): Promise<SelectOption[]> {
-        const body = {
-            apiKey: await this.getApiKey(),
-            modelName: 'Address',
-            calledMethod: 'getWarehouses',
-            methodProperties: {
-                CityName: city,
-                FindByString: search || '',
-                Limit: '30',
-            },
-        };
-
         const response = await fetch(this.apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify({
+                apiKey: await this.getApiKey(),
+                modelName: 'Address',
+                calledMethod: 'getWarehouses',
+                methodProperties: {
+                    CityName: city,
+                    FindByString: search || '',
+                    Limit: '30',
+                },
+            }),
         });
 
         const result: NovaPoshtaResponse = await response.json();
@@ -142,10 +138,6 @@ export class DeliveryService {
         }
 
         try {
-            const documents = ttnList.map((ttn) => ({
-                DocumentNumber: String(ttn).trim(),
-            }));
-
             const response = await fetch(this.apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -154,22 +146,20 @@ export class DeliveryService {
                     modelName: 'TrackingDocument',
                     calledMethod: 'getStatusDocuments',
                     methodProperties: {
-                        Documents: documents,
+                        Documents: ttnList.map((ttn) => ({ DocumentNumber: String(ttn).trim() })),
                     },
                 }),
             });
 
             const result: NovaPoshtaTrackingResponse = await response.json();
 
-            if (result.success) {
-                return result.data.map((data) => ({
+            return result.success
+                ? result.data.map((data) => ({
                     ttn: data.Number,
                     statusCode: data.StatusCode,
                     statusDescription: data.Status,
-                }));
-            }
-
-            return [];
+                }))
+                : [];
         } catch (error) {
             console.error('[NovaPoshta] Error multiple tracking:', error);
             return [];

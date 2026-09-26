@@ -51,13 +51,10 @@ export class StorefrontService {
         if (availableProducts.length === 0) {
             return { items: [], totalCount: 0, filters: await this.buildEmptyFilters() };
         }
-        const productIds = availableProducts.map((r) => r.productId);
-        const uniqueProductIds = [...new Set(productIds)];
-        const totalCount = uniqueProductIds.length;
+        const uniqueProductIds = [...new Set(availableProducts.map((r) => r.productId))];
         const sortedPaginatedIds = await this.sortAndPaginate(uniqueProductIds, availableProducts, dto);
         const items = await this.buildProductCards(sortedPaginatedIds, availableProducts);
-        const filters = await this.buildFilters(dto, categoryIds);
-        return { items, totalCount, filters };
+        return { items, totalCount: uniqueProductIds.length, filters: await this.buildFilters(dto, categoryIds) };
     }
 
     async findBySlug(slug: string) {
@@ -561,8 +558,7 @@ export class StorefrontService {
       LEFT JOIN "Color" c ON c."id" = v."colorId"
       WHERE v."productId" = ANY($1::int[]) AND v."isActive" = true AND v."deletedAt" IS NULL AND (v."stockQty" - v."reservedQty") > 0
     `, productIds);
-        const availableIds = [...new Set(variantRows.map((r) => r.productId))];
-        const orderedIds = productIds.filter((id) => availableIds.includes(id));
-        return this.buildProductCards(orderedIds, variantRows);
+        const availableIds = new Set(variantRows.map((r) => r.productId));
+        return this.buildProductCards(productIds.filter((id) => availableIds.has(id)), variantRows);
     }
 }

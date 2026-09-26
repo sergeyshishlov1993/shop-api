@@ -37,8 +37,7 @@ export class CartController {
     @Req() req: Request & { user?: { sub?: number; id?: number } },
     @CartSessionId() sessionId: string | null,
   ) {
-    const ownerInput = this.resolveOwner(req, sessionId);
-    return this.cartService.resolveCartOwner(ownerInput);
+    return this.cartService.resolveCartOwner(this.resolveOwner(req, sessionId));
   }
 
   @Get('_debug')

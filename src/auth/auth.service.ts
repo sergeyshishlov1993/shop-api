@@ -39,12 +39,10 @@ export class AuthService {
       throw new ConflictException('User with this email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
-        passwordHash,
+        passwordHash: await bcrypt.hash(dto.password, 10),
         firstName: dto.firstName,
         lastName: dto.lastName,
         phone: dto.phone,
@@ -81,9 +79,7 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
-
-    if (!isPasswordValid) {
+    if (!(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -208,8 +204,7 @@ export class AuthService {
       if (session.expiresAt < new Date()) {
         continue;
       }
-      const isMatch = await bcrypt.compare(refreshToken, session.tokenHash);
-      if (isMatch) {
+      if (await bcrypt.compare(refreshToken, session.tokenHash)) {
         matchedSession = session;
         break;
       }
@@ -243,8 +238,7 @@ export class AuthService {
     });
 
     for (const session of sessions) {
-      const isMatch = await bcrypt.compare(refreshToken, session.tokenHash);
-      if (isMatch) {
+      if (await bcrypt.compare(refreshToken, session.tokenHash)) {
         await this.prisma.refreshSession.update({
           where: { id: session.id },
           data: { revokedAt: new Date() },
@@ -263,11 +257,10 @@ export class AuthService {
       return;
     }
 
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const recentTokensCount = await this.prisma.passwordResetToken.count({
       where: {
         userId: user.id,
-        createdAt: { gte: oneHourAgo },
+        createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
       },
     });
 
@@ -276,14 +269,12 @@ export class AuthService {
     }
 
     const rawToken = randomUUID();
-    const tokenHash = await bcrypt.hash(rawToken, 10);
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 
     await this.prisma.passwordResetToken.create({
       data: {
         userId: user.id,
-        tokenHash,
-        expiresAt,
+        tokenHash: await bcrypt.hash(rawToken, 10),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
     });
 
@@ -301,8 +292,7 @@ export class AuthService {
     let matchedToken: (typeof tokens)[0] | null = null;
 
     for (const token of tokens) {
-      const isMatch = await bcrypt.compare(rawToken, token.tokenHash);
-      if (isMatch) {
+      if (await bcrypt.compare(rawToken, token.tokenHash)) {
         matchedToken = token;
         break;
       }
@@ -348,19 +338,16 @@ export class AuthService {
     const accessToken = this.jwtService.sign({ sub: userId, email, role }, signOptions);
 
     const refreshToken = randomUUID();
-    const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-
-    const refreshExpiresIn =
-      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '30d') ?? '30d';
-    const expiresAt = this.calculateExpiry(refreshExpiresIn);
 
     await this.prisma.refreshSession.create({
       data: {
         userId,
-        tokenHash: refreshTokenHash,
+        tokenHash: await bcrypt.hash(refreshToken, 10),
         userAgent: userAgent ?? null,
         ip: ip ?? null,
-        expiresAt,
+        expiresAt: this.calculateExpiry(
+          this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '30d') ?? '30d',
+        ),
       },
     });
 
@@ -373,9 +360,6 @@ export class AuthService {
       return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     }
 
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
-
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,
@@ -383,6 +367,6 @@ export class AuthService {
       d: 24 * 60 * 60 * 1000,
     };
 
-    return new Date(Date.now() + value * multipliers[unit]);
+    return new Date(Date.now() + parseInt(match[1], 10) * multipliers[match[2]]);
   }
 }

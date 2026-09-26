@@ -9,8 +9,7 @@ export interface RequestUser {
 
 export const CurrentUser = createParamDecorator(
   (data: keyof RequestUser | undefined, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest<{ user: RequestUser }>();
-    const user = request.user;
+    const { user } = ctx.switchToHttp().getRequest<{ user: RequestUser }>();
     return data ? user?.[data] : user;
   },
 );

@@ -49,46 +49,29 @@ export class S3Service implements OnModuleInit {
   }
 
   async upload(options: S3UploadOptions): Promise<string> {
-    const command = new PutObjectCommand({
+    await this.client.send(new PutObjectCommand({
       Bucket: this.bucket,
       Key: options.key,
       Body: options.body,
       ContentType: options.contentType,
-    });
-
-    await this.client.send(command);
-
+    }));
     return this.getPublicUrl(options.key);
   }
 
   getPublicUrl(key: string): string {
-    return this.buildPublicUrl(key);
+    return `${this.endpoint}/${this.bucket}/${key}`;
   }
 
   async delete(key: string): Promise<void> {
-    const command = new DeleteObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-    });
-
-    await this.client.send(command);
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
   async getSignedUrl(key: string, expiresIn = 3600): Promise<string> {
-    const command = new GetObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-    });
-
-    return getSignedUrl(this.client, command, { expiresIn });
+    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn });
   }
 
   buildKey(type: string, id: string, size: string, extension = 'webp'): string {
     return `${type}/${id}/${size}.${extension}`;
-  }
-
-  private buildPublicUrl(key: string): string {
-    return `${this.endpoint}/${this.bucket}/${key}`;
   }
 
   private async ensureBucketExists(): Promise<void> {

@@ -13,12 +13,10 @@ export class FeedbackService {
   ) {}
 
   async create(dto: CreateFeedbackDto, ip: string) {
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-
     const recentCount = await this.prisma.feedback.count({
       where: {
         ip,
-        createdAt: { gte: oneHourAgo },
+        createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
         deletedAt: null,
       },
     });
@@ -49,11 +47,7 @@ export class FeedbackService {
   }
 
   async findAll(status?: FeedbackStatus, page = 1, limit = 20) {
-    const where: Record<string, unknown> = { deletedAt: null };
-
-    if (status) {
-      where.status = status;
-    }
+    const where = { deletedAt: null, ...(status ? { status } : {}) };
 
     const [items, totalCount] = await Promise.all([
       this.prisma.feedback.findMany({

@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { hashToken } from './token-hash';
 import { randomUUID } from 'crypto';
 import { CartService } from '../cart/cart.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -193,24 +194,12 @@ export class AuthService {
     userAgent?: string,
     ip?: string,
   ): Promise<Tokens> {
-    const sessions = await this.prisma.refreshSession.findMany({
-      where: { revokedAt: null },
+    const matchedSession = await this.prisma.refreshSession.findUnique({
+      where: { tokenHash: hashToken(refreshToken) },
       include: { user: true },
     });
 
-    let matchedSession: (typeof sessions)[0] | null = null;
-
-    for (const session of sessions) {
-      if (session.expiresAt < new Date()) {
-        continue;
-      }
-      if (await bcrypt.compare(refreshToken, session.tokenHash)) {
-        matchedSession = session;
-        break;
-      }
-    }
-
-    if (!matchedSession) {
+    if (!matchedSession || matchedSession.revokedAt || matchedSession.expiresAt < new Date()) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -233,19 +222,10 @@ export class AuthService {
   }
 
   async logout(refreshToken: string): Promise<void> {
-    const sessions = await this.prisma.refreshSession.findMany({
-      where: { revokedAt: null },
+    await this.prisma.refreshSession.updateMany({
+      where: { tokenHash: hashToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date() },
     });
-
-    for (const session of sessions) {
-      if (await bcrypt.compare(refreshToken, session.tokenHash)) {
-        await this.prisma.refreshSession.update({
-          where: { id: session.id },
-          data: { revokedAt: new Date() },
-        });
-        return;
-      }
-    }
   }
 
   async forgotPassword(email: string): Promise<void> {
@@ -273,7 +253,7 @@ export class AuthService {
     await this.prisma.passwordResetToken.create({
       data: {
         userId: user.id,
-        tokenHash: await bcrypt.hash(rawToken, 10),
+        tokenHash: hashToken(rawToken),
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
     });
@@ -282,21 +262,13 @@ export class AuthService {
   }
 
   async resetPassword(rawToken: string, newPassword: string): Promise<void> {
-    const tokens = await this.prisma.passwordResetToken.findMany({
+    const matchedToken = await this.prisma.passwordResetToken.findFirst({
       where: {
+        tokenHash: hashToken(rawToken),
         usedAt: null,
         expiresAt: { gt: new Date() },
       },
     });
-
-    let matchedToken: (typeof tokens)[0] | null = null;
-
-    for (const token of tokens) {
-      if (await bcrypt.compare(rawToken, token.tokenHash)) {
-        matchedToken = token;
-        break;
-      }
-    }
 
     if (!matchedToken) {
       throw new BadRequestException('Invalid or expired reset token');
@@ -342,7 +314,7 @@ export class AuthService {
     await this.prisma.refreshSession.create({
       data: {
         userId,
-        tokenHash: await bcrypt.hash(refreshToken, 10),
+        tokenHash: hashToken(refreshToken),
         userAgent: userAgent ?? null,
         ip: ip ?? null,
         expiresAt: this.calculateExpiry(

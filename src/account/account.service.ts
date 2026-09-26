@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { OrderStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { hashToken } from '../auth/token-hash';
 import { CartService } from '../cart/cart.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { loadVariantImages } from '../common/utils/variant-image';
@@ -101,31 +102,15 @@ export class AccountService {
       data: { passwordHash: await bcrypt.hash(newPassword, 10) },
     });
 
-    const sessions = await this.prisma.refreshSession.findMany({
-      where: { userId, revokedAt: null },
+    // Відкликаємо всі сесії, крім поточної
+    await this.prisma.refreshSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(currentRefreshToken && { tokenHash: { not: hashToken(currentRefreshToken) } }),
+      },
+      data: { revokedAt: new Date() },
     });
-
-    let currentSessionId: number | null = null;
-
-    if (currentRefreshToken) {
-      for (const session of sessions) {
-        if (await bcrypt.compare(currentRefreshToken, session.tokenHash)) {
-          currentSessionId = session.id;
-          break;
-        }
-      }
-    }
-
-    const sessionIdsToRevoke = sessions
-      .filter((session) => session.id !== currentSessionId)
-      .map((session) => session.id);
-
-    if (sessionIdsToRevoke.length > 0) {
-      await this.prisma.refreshSession.updateMany({
-        where: { id: { in: sessionIdsToRevoke } },
-        data: { revokedAt: new Date() },
-      });
-    }
 
     return { message: 'Password changed successfully' };
   }

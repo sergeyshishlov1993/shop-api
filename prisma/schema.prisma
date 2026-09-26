@@ -154,7 +154,7 @@ model RefreshSession {
   id        Int       @id @default(autoincrement())
   userId    Int
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String
+  tokenHash String    @unique
   userAgent String?
   ip        String?
   expiresAt DateTime
@@ -166,7 +166,7 @@ model PasswordResetToken {
   id        Int       @id @default(autoincrement())
   userId    Int
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())

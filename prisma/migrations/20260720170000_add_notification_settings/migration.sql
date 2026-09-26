@@ -1,0 +1,6 @@
+ALTER TABLE "StoreSettings"
+ADD COLUMN "telegramBotToken" TEXT,
+ADD COLUMN "notifyOnNewOrder" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN "notifyOnNewReview" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN "notifyOnNewFeedback" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN "notifyOnLowStock" BOOLEAN NOT NULL DEFAULT true;

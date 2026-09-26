@@ -1,0 +1,820 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum ProductType {
+  CLOTHING
+  SHOES
+  ACCESSORY
+}
+
+enum SizeType {
+  CLOTHING
+  SHOES
+  ACCESSORY
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  NEW
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+// Способ оплаты заказа. COD — наложенный платёж / оплата при получении.
+// ONLINE — онлайн-эквайринг (инфраструктура готова, но скрыта фиче-флагом).
+enum PaymentMethod {
+  COD
+  ONLINE
+}
+
+// Статус оплаты. NOT_REQUIRED — для COD, деньги берём не мы.
+// PENDING/PAID/FAILED/REFUNDED — жизненный цикл онлайн-платежа.
+enum PaymentStatus {
+  NOT_REQUIRED
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PromoBlockType {
+  NEW
+  HIT
+  SEASONAL
+  CUSTOM
+}
+
+enum FileType {
+  IMAGE
+  VIDEO
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum ExpenseType {
+  PURCHASE
+  LOGISTICS
+  ADVERTISING
+  PACKAGING
+  SALARY
+  SERVICES
+  RETURN
+  OTHER
+}
+
+enum ReturnStatus {
+  NEW
+  UNDER_REVIEW
+  APPROVED
+  RECEIVED
+  REFUNDED
+  REJECTED
+  CANCELLED
+}
+
+enum ReturnReason {
+  WRONG_SIZE
+  DEFECT
+  NOT_AS_DESCRIBED
+  CHANGED_MIND
+  OTHER
+}
+
+enum FeedbackStatus {
+  NEW
+  IN_PROGRESS
+  DONE
+}
+
+// ─── User ───
+
+model User {
+  id                      Int        @id @default(autoincrement())
+  email                   String     @unique
+  passwordHash            String?
+  firstName               String?
+  lastName                String?
+  phone                   String?
+  role                    UserRole   @default(USER)
+  isActive                Boolean    @default(true)
+  personalDiscountPercent Float      @default(0)
+  avatarFileId            Int?
+  avatarFile              FileAsset? @relation("UserAvatar", fields: [avatarFileId], references: [id])
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
+
+  providerAccounts    UserProviderAccount[]
+  refreshSessions     RefreshSession[]
+  passwordResetTokens PasswordResetToken[]
+  deliveryProfiles    UserDeliveryProfile[]
+  favorites           Favorite[]
+  reviews             Review[]
+  cart                Cart?
+  orders              Order[]
+  returnRequests      ReturnRequest[]
+  reviewLikes         ReviewLike[]
+}
+
+model UserProviderAccount {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider       String
+  providerUserId String
+  createdAt      DateTime @default(now())
+
+  @@unique([provider, providerUserId])
+}
+
+model RefreshSession {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model UserDeliveryProfile {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title              String
+  recipientFirstName String
+  recipientLastName  String
+  recipientPhone     String
+  deliveryProvider   String
+  city               String
+  warehouse          String?
+  addressLine        String?
+  postalCode         String?
+  comment            String?
+  isDefault          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+// ─── Catalog ───
+
+model Category {
+  id              Int          @id @default(autoincrement())
+  name            String
+  slug            String       @unique
+  parentId        Int?
+  parent          Category?    @relation("CategoryTree", fields: [parentId], references: [id])
+  children        Category[]   @relation("CategoryTree")
+  productType     ProductType?
+  imageFileId     Int?
+  imageFile       FileAsset?   @relation("CategoryImage", fields: [imageFileId], references: [id])
+  bannerFileId    Int?
+  bannerFile      FileAsset?   @relation("CategoryBanner", fields: [bannerFileId], references: [id])
+  // Кадрування imageFile по пристроях (0..1 → object-position)
+  focalX          Float        @default(0.5)
+  focalY          Float        @default(0.5)
+  focalXTablet    Float        @default(0.5)
+  focalYTablet    Float        @default(0.5)
+  focalXMobile    Float        @default(0.5)
+  focalYMobile    Float        @default(0.5)
+  metaTitle       String?
+  metaDescription String?
+  isActive        Boolean      @default(true)
+  sortOrder       Int          @default(0)
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  products  Product[]
+  sizeChart SizeChart?
+
+  @@index([slug])
+}
+
+model Product {
+  id               Int         @id @default(autoincrement())
+  name             String
+  slug             String      @unique
+  description      String?
+  productType      ProductType
+  categoryId       Int
+  category         Category    @relation(fields: [categoryId], references: [id])
+  brand            String?
+  season           String?
+  material         String?
+  basePrice        Float
+  oldPrice         Float?
+  purchaseCost     Float?
+  hoverVideoFileId Int?
+  hoverVideoFile   FileAsset?  @relation("ProductHoverVideo", fields: [hoverVideoFileId], references: [id])
+  isActive         Boolean     @default(true)
+  isNew            Boolean     @default(false)
+  isHit            Boolean     @default(false)
+  isSeasonal       Boolean     @default(false)
+  metaTitle        String?
+  metaDescription  String?
+  deletedAt        DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  variants           ProductVariant[]
+  media              ProductMedia[]
+  favorites          Favorite[]
+  reviews            Review[]
+  promoProducts      PromoBlockProduct[]
+  stockNotifications StockNotification[]
+
+  @@index([slug])
+  @@index([categoryId])
+}
+
+model ProductVariant {
+  id          Int       @id @default(autoincrement())
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku         String    @unique
+  barcode     String?
+  sizeId      Int?
+  size        Size?     @relation(fields: [sizeId], references: [id])
+  colorId     Int?
+  color       Color?    @relation(fields: [colorId], references: [id])
+  price       Float?
+  stockQty    Int       @default(0)
+  reservedQty Int       @default(0)
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  media      ProductMedia[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@index([productId])
+  @@index([sku])
+}
+
+model Size {
+  id        Int      @id @default(autoincrement())
+  name      String
+  sizeType  SizeType
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+
+  variants ProductVariant[]
+}
+
+model Color {
+  id       Int     @id @default(autoincrement())
+  name     String
+  hexCode  String?
+  isActive Boolean @default(true)
+
+  variants ProductVariant[]
+}
+
+model SizeChart {
+  id         Int      @id @default(autoincrement())
+  categoryId Int      @unique
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  columns    Json
+  rows       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ─── Files & Media ───
+
+model FileAsset {
+  id            Int         @id @default(autoincrement())
+  fileType      FileType
+  originalName  String
+  mimeType      String
+  size          Int
+  s3Key         String
+  s3KeyThumb    String?
+  s3KeyMedium   String?
+  s3KeyLarge    String?
+  previewFileId Int?
+  previewFile   FileAsset?  @relation("VideoPreview", fields: [previewFileId], references: [id])
+  previews      FileAsset[] @relation("VideoPreview")
+  createdAt     DateTime    @default(now())
+
+  userAvatars        User[]               @relation("UserAvatar")
+  categoryImages     Category[]           @relation("CategoryImage")
+  categoryBanners    Category[]           @relation("CategoryBanner")
+  promoBlockImages   PromoBlock[]         @relation("PromoBlockImage")
+  productMedia       ProductMedia[]
+  productHoverVideos Product[]            @relation("ProductHoverVideo")
+  heroSlides         HeroSlide[]
+  instagramPosts     InstagramPost[]
+  returnPhotos       ReturnRequestPhoto[]
+  reviewMedia        ReviewMedia[]
+}
+
+model ReviewLike {
+  reviewId  Int
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([reviewId, userId])
+}
+
+model ReviewMedia {
+  id        Int       @id @default(autoincrement())
+  reviewId  Int
+  review    Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  fileId    Int
+  file      FileAsset @relation(fields: [fileId], references: [id])
+  mediaType MediaType
+
+  @@index([reviewId])
+}
+
+model ProductMedia {
+  id          Int             @id @default(autoincrement())
+  productId   Int
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId   Int?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  fileId      Int?
+  file        FileAsset?      @relation(fields: [fileId], references: [id])
+  // Внешняя ссылка (Instagram reel/post) вместо файла
+  externalUrl String?
+  mediaType   MediaType
+  sortOrder   Int             @default(0)
+  isMain      Boolean         @default(false)
+  isHover     Boolean         @default(false)
+  // Точка фокуса (0..1) для object-position при кропе под разные пропорции.
+  focalX      Float           @default(0.5)
+  focalY      Float           @default(0.5)
+  createdAt   DateTime        @default(now())
+}
+
+// ─── Content ───
+
+model HeroSlide {
+  id           Int       @id @default(autoincrement())
+  title        String
+  subtitle     String?
+  buttonText   String?
+  buttonLink   String?
+  mediaFileId  Int
+  mediaFile    FileAsset @relation(fields: [mediaFileId], references: [id])
+  mediaType    MediaType
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  // Точка фокуса (0..1) для object-position слайда на разных экранах.
+  focalX       Float     @default(0.5)
+  focalY       Float     @default(0.5)
+  // Окремі точки фокуса для планшета і телефона (focalX/focalY — десктоп).
+  focalXTablet Float     @default(0.5)
+  focalYTablet Float     @default(0.5)
+  focalXMobile Float     @default(0.5)
+  focalYMobile Float     @default(0.5)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model PromoBlock {
+  id           Int            @id @default(autoincrement())
+  type         PromoBlockType
+  title        String
+  isActive     Boolean        @default(true)
+  sortOrder    Int            @default(0)
+  // Власне фото блоку (якщо немає — витрина бере фото першого товару) і кадрування по пристроях.
+  imageFileId  Int?
+  imageFile    FileAsset?     @relation("PromoBlockImage", fields: [imageFileId], references: [id], onDelete: SetNull)
+  focalX       Float          @default(0.5)
+  focalY       Float          @default(0.5)
+  focalXTablet Float          @default(0.5)
+  focalYTablet Float          @default(0.5)
+  focalXMobile Float          @default(0.5)
+  focalYMobile Float          @default(0.5)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  products PromoBlockProduct[]
+}
+
+model PromoBlockProduct {
+  id           Int        @id @default(autoincrement())
+  promoBlockId Int
+  promoBlock   PromoBlock @relation(fields: [promoBlockId], references: [id], onDelete: Cascade)
+  productId    Int
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder    Int        @default(0)
+
+  @@unique([promoBlockId, productId])
+}
+
+model PageContent {
+  id              Int      @id @default(autoincrement())
+  slug            String   @unique
+  title           String
+  contentJson     Json?
+  metaTitle       String?
+  metaDescription String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ─── Favorites ───
+
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+// ─── Reviews ───
+
+model Review {
+  id         Int           @id @default(autoincrement())
+  productId  Int
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentId   Int?
+  parent     Review?       @relation("ReviewReplies", fields: [parentId], references: [id])
+  replies    Review[]      @relation("ReviewReplies")
+  rating     Int?
+  text       String
+  depth      Int           @default(0)
+  media      ReviewMedia[]
+  likes      ReviewLike[]
+  likesCount Int           @default(0)
+  editedAt   DateTime?
+  status     ReviewStatus  @default(PENDING)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([productId])
+  @@index([parentId])
+}
+
+// ─── Cart ───
+
+model Cart {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @unique
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items CartItem[]
+
+  @@index([userId])
+}
+
+model CartItem {
+  id                Int            @id @default(autoincrement())
+  cartId            Int
+  cart              Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productVariantId  Int
+  productVariant    ProductVariant @relation(fields: [productVariantId], references: [id])
+  quantity          Int
+  unitPriceSnapshot Float
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@unique([cartId, productVariantId])
+}
+
+// ─── Orders ───
+
+model Order {
+  id                      Int           @id @default(autoincrement())
+  orderNumber             String        @unique
+  userId                  Int?
+  user                    User?         @relation(fields: [userId], references: [id])
+  customerName            String
+  customerPhone           String
+  customerEmail           String?
+  deliveryProvider        String?
+  city                    String?
+  cityRef                 String?
+  warehouse               String?
+  warehouseRef            String?
+  addressLine             String?
+  postalCode              String?
+  deliveryComment         String?
+  status                  OrderStatus   @default(NEW)
+  subtotal                Float
+  discountAmount          Float         @default(0)
+  deliveryAmount          Float         @default(0)
+  totalAmount             Float
+  totalCost               Float         @default(0)
+  grossProfit             Float         @default(0)
+  netProfit               Float         @default(0)
+  personalDiscountPercent Float         @default(0)
+  internalComment         String?
+  trackingNumber          String?
+  utmSource               String?
+  utmMedium               String?
+  utmCampaign             String?
+  utmContent              String?
+  utmTerm                 String?
+  referer                 String?
+  idempotencyKey          String?       @unique
+  paymentMethod           PaymentMethod @default(COD)
+  paymentStatus           PaymentStatus @default(NOT_REQUIRED)
+  paymentProvider         String?
+  paymentId               String?
+  paidAt                  DateTime?
+  couponCode              String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  items          OrderItem[]
+  statusHistory  OrderStatusHistory[]
+  returnRequests ReturnRequest[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id               Int             @id @default(autoincrement())
+  orderId          Int
+  order            Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productVariantId Int?
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
+  productName      String
+  categoryName     String?
+  productType      ProductType?
+  sku              String
+  sizeName         String?
+  colorName        String?
+  salePrice        Float
+  purchaseCost     Float           @default(0)
+  quantity         Int
+  lineRevenue      Float
+  lineCost         Float           @default(0)
+  lineProfit       Float           @default(0)
+  createdAt        DateTime        @default(now())
+
+  returnItems ReturnRequestItem[]
+
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id        Int          @id @default(autoincrement())
+  orderId   Int
+  order     Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  oldStatus OrderStatus?
+  newStatus OrderStatus
+  note      String?
+  createdAt DateTime     @default(now())
+}
+
+// ─── Returns ───
+
+model ReturnRequest {
+  id             Int          @id @default(autoincrement())
+  number         String       @unique
+  orderId        Int
+  order          Order        @relation(fields: [orderId], references: [id])
+  userId         Int
+  user           User         @relation(fields: [userId], references: [id])
+  status         ReturnStatus @default(NEW)
+  reason         ReturnReason
+  comment        String?
+  refundDetails  String
+  trackingNumber String?
+  refundAmount   Float?
+  managerComment String?
+  rejectReason   String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  items   ReturnRequestItem[]
+  photos  ReturnRequestPhoto[]
+  history ReturnStatusHistory[]
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+}
+
+model ReturnRequestItem {
+  id              Int           @id @default(autoincrement())
+  returnRequestId Int
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  orderItemId     Int
+  orderItem       OrderItem     @relation(fields: [orderItemId], references: [id])
+  quantity        Int
+
+  @@index([returnRequestId])
+  @@index([orderItemId])
+}
+
+model ReturnRequestPhoto {
+  id              Int           @id @default(autoincrement())
+  returnRequestId Int
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  fileId          Int
+  file            FileAsset     @relation(fields: [fileId], references: [id])
+
+  @@index([returnRequestId])
+}
+
+model ReturnStatusHistory {
+  id              Int           @id @default(autoincrement())
+  returnRequestId Int
+  returnRequest   ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  status          ReturnStatus
+  comment         String?
+  byAdmin         Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+
+  @@index([returnRequestId])
+}
+
+// ─── Feedback ───
+
+model Feedback {
+  id        Int            @id @default(autoincrement())
+  name      String
+  email     String?
+  phone     String?
+  message   String
+  status    FeedbackStatus @default(NEW)
+  ip        String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  deletedAt DateTime?
+}
+
+// ─── Finance ───
+
+model Expense {
+  id          Int         @id @default(autoincrement())
+  title       String
+  type        ExpenseType
+  amount      Float
+  expenseDate DateTime
+  note        String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([expenseDate])
+}
+
+// ─── Settings ───
+
+model StoreSettings {
+  id                       Int      @id @default(autoincrement())
+  storePhone               String?
+  storeEmail               String?
+  storeAddress             String?
+  socialLinksJson          Json?
+  defaultLowStockThreshold Int      @default(3)
+  currency                 String   @default("UAH")
+  telegramAdminChatId      String?
+  telegramBotToken         String?
+  notifyOnNewOrder         Boolean  @default(true)
+  notifyOnNewReview        Boolean  @default(true)
+  notifyOnNewFeedback      Boolean  @default(true)
+  notifyOnLowStock         Boolean  @default(true)
+  novaPoshtaApiKey         String?
+  // Реквизиты отправителя Nova Poshta (из кабинета) для автосоздания ТТН.
+  npSenderRef              String?
+  npSenderContactRef       String?
+  npSenderCityRef          String?
+  npSenderWarehouseRef     String?
+  npSenderPhone            String?
+  seoDefaultsJson          Json?
+  themeJson                Json?
+  onlinePaymentEnabled     Boolean  @default(false)
+  // Кількість днів після доставки, протягом яких можна оформити повернення.
+  returnWindowDays         Int      @default(14)
+  // Повністю вмикає/вимикає повернення (кабінет, кнопки, API клієнта)
+  returnsEnabled           Boolean  @default(true)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+// ─── Coupons (промокоды) ───
+
+enum CouponDiscountType {
+  PERCENT
+  FIXED
+}
+
+model Coupon {
+  id            Int                @id @default(autoincrement())
+  code          String             @unique
+  discountType  CouponDiscountType
+  discountValue Float
+  minSubtotal   Float?
+  maxUses       Int?
+  usedCount     Int                @default(0)
+  expiresAt     DateTime?
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([code])
+}
+
+// ─── Stock notifications (подписка на поступление) ───
+
+model StockNotification {
+  id         Int       @id @default(autoincrement())
+  productId  Int
+  product    Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  email      String
+  userId     Int?
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([productId])
+  @@index([notifiedAt])
+}
+
+// ─── Newsletter (маркетинговая рассылка, double opt-in) ───
+
+enum NewsletterStatus {
+  PENDING
+  CONFIRMED
+  UNSUBSCRIBED
+}
+
+model NewsletterSubscriber {
+  id             Int              @id @default(autoincrement())
+  email          String           @unique
+  status         NewsletterStatus @default(PENDING)
+  token          String           @unique
+  source         String?
+  confirmedAt    DateTime?
+  unsubscribedAt DateTime?
+  createdAt      DateTime         @default(now())
+}
+
+// ─── Instagram (ручной курируемый блок) ───
+
+model InstagramPost {
+  id             Int       @id @default(autoincrement())
+  fileId         Int
+  file           FileAsset @relation(fields: [fileId], references: [id])
+  link           String?
+  // Пост-відео (reel): на вітрині в слайдері показуємо вбудований плеєр Instagram, фото — лише обкладинка
+  isVideo        Boolean   @default(false)
+  // Лайки й коментарі з публічної сторінки поста (оновлюються щодня; репостів Instagram без API не віддає)
+  likesCount     Int?
+  commentsCount  Int?
+  statsUpdatedAt DateTime?
+  sortOrder      Int       @default(0)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+}

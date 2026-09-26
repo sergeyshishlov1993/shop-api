@@ -1,0 +1,4735 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "description": "**Доступ:** публичный\n\n**Бизнес-логика:**\n1. Проверяется уникальность email — если занят, ошибка 400\n2. Пароль хешируется через bcrypt (10 раундов)\n3. Создаётся User с ролью `USER`\n4. Генерируется JWT access token (15 мин)\n5. Генерируется refresh token (UUID), хешируется, сохраняется в RefreshSession с привязкой к userAgent/IP\n6. Refresh token записывается в httpOnly cookie\n\n**Мерж корзины:**\nЕсли в cookie есть `cartSessionId` (гостевая корзина) — после регистрации она привязывается к новому аккаунту. При пересечении товаров берётся максимальное количество.\n\n**Ответ:** `{ accessToken }` + cookie `refreshToken` (path: /api/auth, maxAge: 30 дней)",
+        "operationId": "AuthController_register",
+        "parameters": [
+          {
+            "name": "user-agent",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Пользователь создан. Access token в теле, refresh token в cookie."
+          },
+          "400": {
+            "description": "Ошибка валидации (невалидный email, короткий пароль) или email уже занят."
+          }
+        },
+        "summary": "Регистрация нового пользователя",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "description": "**Доступ:** публичный · **Rate limit:** 5 попыток/мин на IP\n\n**Бизнес-логика:**\n1. Поиск пользователя по email\n2. Проверка `isActive` — если деактивирован админом → 403\n3. Сравнение пароля с хешем (bcrypt) — неверный → 401 (без уточнения что именно неверно — защита от перебора)\n4. Генерация пары токенов, создание RefreshSession\n\n**Мерж корзины:** если есть `cartSessionId` в cookie — гостевая корзина мержится с корзиной аккаунта\n\n**Защита от брутфорса:** при превышении 5 попыток/мин с одного IP → 429. Счётчик сбрасывается через 60 сек.",
+        "operationId": "AuthController_login",
+        "parameters": [
+          {
+            "name": "user-agent",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешный вход. Access token в теле, refresh token в cookie."
+          },
+          "401": {
+            "description": "Неверный email или пароль."
+          },
+          "403": {
+            "description": "Аккаунт деактивирован администратором."
+          },
+          "429": {
+            "description": "Превышен лимит попыток входа (5/мин на IP)."
+          }
+        },
+        "summary": "Вход в аккаунт",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "description": "**Доступ:** требует cookie `refreshToken`\n\n**Зачем:** access token живёт 15 мин. Когда истекает, фронтенд вызывает этот метод для получения нового без повторного ввода пароля.\n\n**Бизнес-логика:**\n1. Читается refresh token из httpOnly cookie\n2. Хеш токена ищется в RefreshSession\n3. Проверяется: не отозвана (`revokedAt IS NULL`), не просрочена (`expiresAt > now`)\n4. Старая сессия отзывается (`revokedAt = now`)\n5. Создаётся новая пара access + refresh token\n6. Новая RefreshSession сохраняется\n\n**Ротация токенов:** каждый refresh token одноразовый. После использования инвалидируется. Если злоумышленник перехватит старый токен — сессия уже отозвана, запрос вернёт 401.",
+        "operationId": "AuthController_refresh",
+        "parameters": [
+          {
+            "name": "user-agent",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Новая пара токенов выдана."
+          },
+          "401": {
+            "description": "Refresh token отсутствует, недействителен, просрочен или сессия отозвана."
+          }
+        },
+        "security": [
+          {
+            "refreshToken": []
+          }
+        ],
+        "summary": "Обновление access token",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:**\n1. Читается refresh token из cookie\n2. RefreshSession помечается как отозванная (`revokedAt = now`)\n3. Cookie `refreshToken` очищается\n\n**Важно:** отзывается только текущая сессия. Остальные устройства продолжают работать. Для принудительного выхода со всех устройств — смена пароля (PATCH /storefront/account/password).",
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Сессия отозвана, cookie очищена."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Выход из аккаунта",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/auth/forgot-password": {
+      "post": {
+        "description": "**Доступ:** публичный · **Rate limit:** 3 запроса/час на IP\n\n**Бизнес-логика:**\n1. Поиск пользователя по email\n2. **Если не найден** — всё равно возвращается 201 (не раскрываем существование email)\n3. Если найден — генерируется UUID токен, хешируется, сохраняется PasswordResetToken с TTL 1 час\n4. Отправляется email через Resend: `{FRONTEND_URL}/reset-password?token={token}`\n\n**Безопасность:**\n- Ответ всегда одинаковый (201) — защита от перечисления аккаунтов\n- Rate limit 3/час на IP — защита от спама\n- Токен одноразовый, живёт 1 час",
+        "operationId": "AuthController_forgotPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Если email существует, ссылка отправлена. Ответ всегда одинаковый."
+          },
+          "429": {
+            "description": "Превышен лимит запросов (3/час на IP)."
+          }
+        },
+        "summary": "Запрос на восстановление пароля",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/auth/reset-password": {
+      "post": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** пользователь перешёл по ссылке из email и вводит новый пароль.\n\n**Бизнес-логика:**\n1. Токен хешируется, ищется PasswordResetToken по хешу\n2. Проверяется: не использован (`usedAt IS NULL`), не просрочен (`expiresAt > now`)\n3. Новый пароль хешируется (bcrypt)\n4. Обновляется `passwordHash` пользователя\n5. Токен помечается как использованный (`usedAt = now`)\n6. **Все RefreshSession пользователя отзываются** — принудительный выход со всех устройств\n\n**Почему отзываются все сессии:** если пароль сбрасывается из-за компрометации, все активные сессии (возможно злоумышленника) закрываются. Пользователь входит заново с новым паролем.",
+        "operationId": "AuthController_resetPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Пароль обновлён, все активные сессии отозваны."
+          },
+          "400": {
+            "description": "Токен недействителен, просрочен или уже использован."
+          }
+        },
+        "summary": "Сброс пароля по токену",
+        "tags": [
+          "Auth — Аутентификация"
+        ]
+      }
+    },
+    "/storefront/cart": {
+      "get": {
+        "description": "**Доступ:** публичный (гость по sessionId) или авторизованный (JWT)\n\n**Зачем:** отображение корзины — список товаров, количество, цены, итого.\n\n**Идентификация корзины:**\n- Авторизованный пользователь → корзина по `userId`\n- Гость → корзина по `cartSessionId` из cookie (UUID, устанавливается фронтендом)\n\n**Ответ:** items[] с данными:\n- variant: productName, sku, size (name), color (name, hexCode), main media URL\n- unitPriceSnapshot — актуальная цена варианта (обновляется при каждом запросе)\n- quantity, lineTotal (qty × price)\n- availabilityStatus: IN_STOCK / LOW_STOCK / OUT_OF_STOCK (если остаток изменился)\n\nТовары с `availableQty = 0` остаются в корзине со статусом OUT_OF_STOCK — покупатель сам решает удалить или подождать.",
+        "operationId": "CartController_getCart",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Корзина с актуальными ценами и статусами."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Получить корзину",
+        "tags": [
+          "Storefront — Корзина"
+        ]
+      }
+    },
+    "/storefront/cart/items": {
+      "post": {
+        "description": "**Доступ:** публичный (гость) или авторизованный (JWT)\n\n**Бизнес-логика:**\n1. Проверяется что вариант существует, активен, не удалён\n2. Проверяется `availableQty` (stockQty - reservedQty) ≥ requested quantity\n3. Если вариант уже в корзине — quantity увеличивается (не заменяется)\n4. `unitPriceSnapshot` записывается/обновляется по текущей цене варианта\n5. Если корзины ещё нет — создаётся\n\n**Поля:**\n- `variantId` — id варианта товара (ProductVariant)\n- `quantity` — количество (мин 1)",
+        "operationId": "CartController_addItem",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddCartItemDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Товар добавлен в корзину."
+          },
+          "400": {
+            "description": "Ошибка валидации, недостаточный остаток или вариант недоступен."
+          },
+          "404": {
+            "description": "Вариант не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Добавить товар в корзину",
+        "tags": [
+          "Storefront — Корзина"
+        ]
+      }
+    },
+    "/storefront/cart/items/{id}": {
+      "patch": {
+        "description": "**Доступ:** публичный (гость) или авторизованный (JWT)\n\n**Бизнес-логика:**\n- Проверяется `availableQty` ≥ новое quantity\n- Если `quantity = 0` → позиция удаляется из корзины\n- `unitPriceSnapshot` обновляется по текущей цене",
+        "operationId": "CartController_updateItem",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор элемента корзины (CartItem.id)",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCartItemDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Количество обновлено."
+          },
+          "400": {
+            "description": "Недостаточный остаток или ошибка валидации."
+          },
+          "404": {
+            "description": "Элемент корзины не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Изменить количество товара",
+        "tags": [
+          "Storefront — Корзина"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** публичный (гость) или авторизованный (JWT)\n\n**Бизнес-логика:** физическое удаление CartItem. Проверяется что элемент принадлежит корзине текущего пользователя/сессии.",
+        "operationId": "CartController_removeItem",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор элемента корзины (CartItem.id)",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Товар удалён из корзины."
+          },
+          "404": {
+            "description": "Элемент корзины не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить товар из корзины",
+        "tags": [
+          "Storefront — Корзина"
+        ]
+      }
+    },
+    "/storefront/account/profile": {
+      "get": {
+        "description": "**Доступ:** авторизований користувач (JWT)\n\n**Зачем:** сторінка «Мій профіль» в особистому кабінеті.\n\n**Ответ:** id, email, firstName, lastName, phone, avatarUrl, personalDiscountPercent, createdAt.",
+        "operationId": "AccountController_getProfile",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Профіль отримано."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Профіль користувача",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** авторизований користувач (JWT)\n\n**Редаговані поля:** firstName, lastName, phone. Email змінити не можна.",
+        "operationId": "AccountController_updateProfile",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Профіль оновлено."
+          },
+          "400": {
+            "description": "Помилка валідації."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити профіль",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/avatar": {
+      "post": {
+        "operationId": "AccountController_uploadAvatar",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Аватар оновлено."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Завантажити або замінити аватар користувача",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      },
+      "delete": {
+        "operationId": "AccountController_deleteAvatar",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Аватар видалено."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити аватар користувача",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/password": {
+      "patch": {
+        "description": "**Доступ:** авторизований користувач (JWT)\n\n**Бізнес-логіка:**\n1. Перевіряється поточний пароль\n2. Новий пароль хешується і зберігається\n3. Всі RefreshSession крім поточної відкликаються — користувач залишається залогіненим на поточному пристрої, решта розлогінюються",
+        "operationId": "AccountController_changePassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Пароль змінено, інші сесії відкликано."
+          },
+          "400": {
+            "description": "Невірний поточний пароль або помилка валідації."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Змінити пароль",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/orders": {
+      "get": {
+        "description": "**Доступ:** авторизований користувач (JWT)\n\n**Зачем:** сторінка «Мої замовлення» в особистому кабінеті.\n\n**Фільтри:**\n- `status` — фільтр по статусу замовлення\n\n**Пагінація:** `page`, `limit`\n\n**Ответ:** items[] з orderNumber, status, totalAmount, itemsCount, createdAt + totalCount. Тільки замовлення поточного користувача.",
+        "operationId": "AccountController_getOrders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список замовлень користувача."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Мої замовлення",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/orders/{id}": {
+      "get": {
+        "operationId": "AccountController_getOrderById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Деталі мого замовлення",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/orders/{id}/reorder": {
+      "post": {
+        "operationId": "AccountController_reorder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Повторити замовлення та додати доступні позиції в кошик",
+        "tags": [
+          "Storefront — Особистий кабінет"
+        ]
+      }
+    },
+    "/storefront/account/delivery-profiles": {
+      "get": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Зачем:** сохранённые адреса доставки. При оформлении заказа можно выбрать адрес одним кликом вместо повторного заполнения.\n\n**Ответ:** массив профилей, у одного `isDefault: true` (выбранный по умолчанию).",
+        "operationId": "DeliveryProfileController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список профилей доставки успешно получен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список адресов доставки",
+        "tags": [
+          "Account — Личный кабинет"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Зачем:** сохранить новый адрес для быстрого оформления заказов.\n\n**Поля:**\n- `title` — название для удобства («Дом», «Офис»)\n- `recipientFirstName/LastName/Phone` — данные получателя (может отличаться от владельца аккаунта)\n- `deliveryProvider` — служба доставки (Нова Пошта, Укрпошта и т.д.)\n- `city` — город\n- `warehouse` — отделение (для отделений)\n- `addressLine` — адрес (для курьерской)\n- `isDefault` — сделать основным\n\n**Бизнес-логика:** если `isDefault: true` — у всех остальных профилей пользователя `isDefault` сбрасывается (только один профиль по умолчанию).",
+        "operationId": "DeliveryProfileController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeliveryProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Профиль доставки создан."
+          },
+          "400": {
+            "description": "Ошибка валидации входных данных."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать адрес доставки",
+        "tags": [
+          "Account — Личный кабинет"
+        ]
+      }
+    },
+    "/storefront/account/delivery-profiles/{id}": {
+      "patch": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:** проверяется принадлежность профиля текущему пользователю. Если передан `isDefault: true` — остальные профили сбрасываются.",
+        "operationId": "DeliveryProfileController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор профиля доставки",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeliveryProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Профиль доставки обновлён."
+          },
+          "400": {
+            "description": "Ошибка валидации или некорректный id."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "404": {
+            "description": "Профиль не найден или принадлежит другому пользователю."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить адрес доставки",
+        "tags": [
+          "Account — Личный кабинет"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:** физическое удаление (не soft delete — это пользовательские данные, не контент магазина). Проверяется принадлежность профиля текущему пользователю.",
+        "operationId": "DeliveryProfileController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор профиля доставки",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Профиль доставки удалён."
+          },
+          "400": {
+            "description": "Некорректный id."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "404": {
+            "description": "Профиль не найден или принадлежит другому пользователю."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить адрес доставки",
+        "tags": [
+          "Account — Личный кабинет"
+        ]
+      }
+    },
+    "/admin/files/upload": {
+      "post": {
+        "operationId": "FileController_uploadFile",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Файл завантажено."
+          },
+          "400": {
+            "description": "Непідтримуваний формат або перевищено розмір."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Завантажити файл",
+        "tags": [
+          "Admin — Файли"
+        ]
+      }
+    },
+    "/admin/files/{id}": {
+      "delete": {
+        "operationId": "FileController_deleteFile",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "ID файлу",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Файл видалено."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          },
+          "404": {
+            "description": "Файл не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити файл",
+        "tags": [
+          "Admin — Файли"
+        ]
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление клиентской базой — просмотр, поиск, назначение персональных скидок.\n\n**Фильтры:**\n- `search` — по email, firstName, lastName, phone (частичное совпадение)\n- `role` — USER или ADMIN\n\n**Сортировка:** по дате регистрации (newest first)\n**Пагинация:** `page`, `limit`\n\n**Ответ:** items[] с id, email, firstName, lastName, phone, role, personalDiscountPercent, ordersCount, totalSpent, createdAt + totalCount.",
+        "operationId": "AdminUserController_getUsers",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список пользователей с пагинацией."
+          },
+          "400": {
+            "description": "Некорректные параметры запроса."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список пользователей",
+        "tags": [
+          "Admin — Пользователи"
+        ]
+      }
+    },
+    "/admin/users/{id}": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Ответ:** полные данные пользователя:\n- Профиль: email, firstName, lastName, phone, role, avatarUrl, personalDiscountPercent, createdAt\n- Статистика: ordersCount, totalSpent, averageOrderAmount\n- Последние заказы (до 5): orderNumber, status, totalAmount, createdAt\n- Профили доставки: все сохранённые адреса",
+        "operationId": "AdminUserController_getUserById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор пользователя",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Полные данные пользователя."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Пользователь не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Пользователь по id",
+        "tags": [
+          "Admin — Пользователи"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** назначение персональной скидки, смена роли, редактирование данных клиента.\n\n**Редактируемые поля:**\n- `personalDiscountPercent` — персональная скидка (0–100%). Применяется автоматически при оформлении заказа\n- `role` — USER или ADMIN (назначение администратором)\n- `firstName`, `lastName`, `phone` — данные профиля\n\n**Бизнес-логика:**\n- Админ не может понизить свою роль (защита от случайного лишения доступа)\n- При изменении role на ADMIN — пользователь получает доступ ко всем admin-эндпоинтам",
+        "operationId": "AdminUserController_updateUser",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор пользователя",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminUserDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Пользователь обновлён."
+          },
+          "400": {
+            "description": "Ошибка валидации или попытка понизить свою роль."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Пользователь не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить пользователя",
+        "tags": [
+          "Admin — Пользователи"
+        ]
+      }
+    },
+    "/admin/sizes": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управління довідником розмірів. Розміри прив'язуються до варіантів товарів.\n\n**Фільтри:**\n- `sizeType` — CLOTHING (XS, S, M, L, XL, XXL), SHOES (36–46), UNIVERSAL (one size)\n\n**Ответ:** масив розмірів з id, name, sizeType, sortOrder.\n\n**Зв'язок з товарами:** при створенні варіанту (ProductVariant) вказується `sizeId`. Тип розміру (`sizeType`) повинен відповідати `productType` товару:\n- CLOTHING → sizeType: CLOTHING\n- SHOES → sizeType: SHOES\n- ACCESSORY → sizeType: UNIVERSAL (або без розміру)",
+        "operationId": "SizeController_findAll",
+        "parameters": [
+          {
+            "name": "sizeType",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список розмірів."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список розмірів",
+        "tags": [
+          "Admin — Розміри"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Поля:**\n- `name` — назва розміру (S, M, L, 42, One Size)\n- `sizeType` — CLOTHING, SHOES або UNIVERSAL\n- `sortOrder` — порядок відображення у фільтрах та на картці товару",
+        "operationId": "SizeController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSizeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Розмір створено."
+          },
+          "400": {
+            "description": "Помилка валідації або дублікат."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Створити розмір",
+        "tags": [
+          "Admin — Розміри"
+        ]
+      }
+    },
+    "/admin/sizes/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бізнес-логіка:** часткове оновлення — name, sortOrder. Зміна sizeType заборонена якщо розмір вже використовується у варіантах.",
+        "operationId": "SizeController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ідентифікатор розміру",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSizeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Розмір оновлено."
+          },
+          "400": {
+            "description": "Помилка валідації."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          },
+          "404": {
+            "description": "Розмір не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити розмір",
+        "tags": [
+          "Admin — Розміри"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бізнес-логіка:** фізичне видалення. Якщо розмір використовується у варіантах товарів — помилка 400 з кількістю пов'язаних варіантів.",
+        "operationId": "SizeController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ідентифікатор розміру",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Розмір видалено."
+          },
+          "400": {
+            "description": "Розмір використовується у варіантах."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          },
+          "404": {
+            "description": "Розмір не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити розмір",
+        "tags": [
+          "Admin — Розміри"
+        ]
+      }
+    },
+    "/admin/colors": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управління довідником кольорів. Кольори прив'язуються до варіантів товарів.\n\n**Ответ:** масив кольорів з id, name, hexCode, sortOrder.\n\n**На вітрині:** hexCode використовується для відображення кружечка кольору у фільтрах та на картці товару.",
+        "operationId": "ColorController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список кольорів."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список кольорів",
+        "tags": [
+          "Admin — Кольори"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Поля:**\n- `name` — назва кольору (Чорний, Білий, Синій)\n- `hexCode` — HEX-код (#000000, #FFFFFF, #0000FF) для відображення на вітрині\n- `sortOrder` — порядок у фільтрах",
+        "operationId": "ColorController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateColorDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Колір створено."
+          },
+          "400": {
+            "description": "Помилка валідації або дублікат."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Створити колір",
+        "tags": [
+          "Admin — Кольори"
+        ]
+      }
+    },
+    "/admin/colors/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бізнес-логіка:** часткове оновлення — name, hexCode, sortOrder.",
+        "operationId": "ColorController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ідентифікатор кольору",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateColorDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Колір оновлено."
+          },
+          "400": {
+            "description": "Помилка валідації."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          },
+          "404": {
+            "description": "Колір не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити колір",
+        "tags": [
+          "Admin — Кольори"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бізнес-логіка:** фізичне видалення. Якщо колір використовується у варіантах товарів — помилка 400 з кількістю пов'язаних варіантів.",
+        "operationId": "ColorController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ідентифікатор кольору",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Колір видалено."
+          },
+          "400": {
+            "description": "Колір використовується у варіантах."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          },
+          "404": {
+            "description": "Колір не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити колір",
+        "tags": [
+          "Admin — Кольори"
+        ]
+      }
+    },
+    "/admin/categories": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление структурой каталога. Категории двухуровневые: родительские (Одяг, Взуття, Аксесуари) и дочерние (Куртки, Кросівки, Сумки).\n\n**Параметр:** `includeDeleted` — показать soft-deleted категории (для восстановления)\n\n**Структура:** дерево — родительские категории содержат массив `children` с дочерними.",
+        "operationId": "CategoryController_findAll",
+        "parameters": [
+          {
+            "name": "includeDeleted",
+            "required": false,
+            "in": "query",
+            "description": "Включить удалённые категории",
+            "schema": {
+              "example": "true",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Дерево категорий получено."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Дерево категорий",
+        "tags": [
+          "Admin — Категории"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- `slug` должен быть уникальным (используется в URL витрины)\n- `parentId` — если указан, создаётся дочерняя категория (только 2 уровня: parent → child)\n- `productType` — тип товаров (`CLOTHING`, `SHOES`, `ACCESSORY`). Определяет какие размеры доступны для вариантов товаров этой категории\n- `imageFileId`, `bannerFileId` — привязка загруженных файлов (из POST /admin/files/upload)\n\n**Побочные эффекты:** сброс кеша категорий на витрине",
+        "operationId": "CategoryController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCategoryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Категория создана, кеш витрины сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации, дублирующий slug или превышена вложенность."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать категорию",
+        "tags": [
+          "Admin — Категории"
+        ]
+      }
+    },
+    "/admin/categories/{id}": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Ответ:** полные данные категории включая связанные файлы (изображение, баннер), мета-теги для SEO, productType.",
+        "operationId": "CategoryController_findById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор категории",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Категория получена."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Категория не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Категория по id",
+        "tags": [
+          "Admin — Категории"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление. При изменении slug проверяется уникальность. При изменении parentId проверяется что не превышается глубина вложенности (макс 2 уровня).\n\n**Побочные эффекты:** сброс кеша категорий и каталога на витрине",
+        "operationId": "CategoryController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор категории",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCategoryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Категория обновлена, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации, дублирующий slug или некорректный id."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Категория не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить категорию",
+        "tags": [
+          "Admin — Категории"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- **Soft delete** — проставляется `deletedAt`, категория скрывается с витрины но сохраняется в БД\n- Перед удалением проверяется что в категории нет активных товаров (не удалённых). Если есть — ошибка 400\n- Для восстановления — обновить через PATCH (убрать deletedAt)\n\n**Побочные эффекты:** сброс кеша категорий и каталога",
+        "operationId": "CategoryController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор категории",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Категория soft-deleted, кеш сброшен."
+          },
+          "400": {
+            "description": "В категории есть активные товары — удаление невозможно."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Категория не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить категорию",
+        "tags": [
+          "Admin — Категории"
+        ]
+      }
+    },
+    "/storefront/categories": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** отображение меню категорий на витрине, навигация по каталогу, хлебные крошки.\n\n**Бизнес-логика:**\n- Возвращаются только активные (`isActive: true`) и не удалённые (`deletedAt IS NULL`) категории\n- Структура — дерево: родительские категории с массивом `children`\n- Сортировка по `sortOrder`\n- Каждая категория содержит: id, name, slug, productType, imageUrl, bannerUrl\n\n**Кеш:** ключ `categories`, TTL 300 сек (5 мин). Сбрасывается при любом изменении категорий в админке.",
+        "operationId": "CategoryStorefrontController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Дерево категорий витрины."
+          }
+        },
+        "summary": "Дерево активных категорий",
+        "tags": [
+          "Storefront — Категории"
+        ]
+      }
+    },
+    "/admin/products": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление каталогом — просмотр, поиск, фильтрация всех товаров включая неактивные и удалённые.\n\n**Фильтры:** `categoryId`, `productType`, `brand`, `isActive`, `isNew`, `isHit`, `isSeasonal`\n**Поиск:** по `name`, `slug`, `sku` (частичное совпадение)\n**Сортировка:** `createdAt`, `name`, `basePrice` (asc/desc)\n**Пагинация:** `page`, `limit`\n\n**Отличие от витрины:** показывает ВСЕ товары — неактивные, удалённые, без вариантов.",
+        "operationId": "ProductController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список товаров с пагинацией."
+          },
+          "400": {
+            "description": "Некорректные параметры запроса."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список товаров",
+        "tags": [
+          "Admin — Товары"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- `slug` должен быть уникальным (используется в URL: /products/{slug})\n- `categoryId` — категория должна существовать и быть активной\n- `productType` должен совпадать с `productType` категории (CLOTHING товар в CLOTHING категории)\n- `basePrice` — основная цена, `oldPrice` — зачёркнутая цена (для отображения скидки)\n- `purchaseCost` — себестоимость (для расчёта маржи и прибыли в отчётах)\n- Флаги `isNew`, `isHit`, `isSeasonal` — для промо-блоков и фильтров на витрине\n\n**Побочные эффекты:** сброс кеша каталога",
+        "operationId": "ProductController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Товар создан, кеш каталога сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации, дублирующий slug, несуществующая категория или несовпадение productType."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать товар",
+        "tags": [
+          "Admin — Товары"
+        ]
+      }
+    },
+    "/admin/products/{id}": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Ответ:** полные данные товара включая:\n- Все варианты (включая неактивные и удалённые) с размером, цветом, ценой, остатками\n- Все медиа (изображения, видео) с URL и сортировкой\n- Категория с breadcrumb\n- SEO мета-теги\n- Финансовые поля (purchaseCost, маржа)",
+        "operationId": "ProductController_findById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Товар с вариантами и медиа."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Товар по id",
+        "tags": [
+          "Admin — Товары"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление. При изменении slug проверяется уникальность. При изменении categoryId проверяется совместимость productType.\n\n**Побочные эффекты:** сброс кеша каталога и карточки товара (по slug)",
+        "operationId": "ProductController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Товар обновлён, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации, дублирующий slug или некорректный id."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить товар",
+        "tags": [
+          "Admin — Товары"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- **Soft delete** — проставляется `deletedAt`, товар скрывается с витрины но сохраняется в БД\n- Все варианты товара также помечаются как удалённые\n- Товар пропадает из каталога, поиска, фильтров, промо-блоков\n- Заказы со снепшотами этого товара сохраняются без изменений\n\n**Побочные эффекты:** сброс кеша каталога",
+        "operationId": "ProductController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Товар soft-deleted, кеш сброшен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить товар",
+        "tags": [
+          "Admin — Товары"
+        ]
+      }
+    },
+    "/admin/products/{productId}/variants": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** просмотр всех вариантов (SKU) товара — размеры, цвета, цены, остатки, резервы.\n\n**Что такое вариант:** конкретная комбинация товара для покупки. Например товар «Куртка зимова» может иметь варианты: L/Чорний, L/Синій, XL/Чорний — каждый со своим SKU, ценой и остатком.\n\n**Ответ:** все варианты включая неактивные и soft-deleted, с данными size, color, stockQty, reservedQty.",
+        "operationId": "VariantController_findAll",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список вариантов товара."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список вариантов товара",
+        "tags": [
+          "Admin — Варианты товаров"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- `sku` должен быть уникальным глобально (артикул для складского учёта)\n- `sizeId` обязателен для типов CLOTHING и SHOES, опционален для ACCESSORY\n- Тип размера (`sizeType`) должен совпадать с `productType` товара (нельзя присвоить обувной размер одежде)\n- `colorId` — цвет варианта (опционально)\n- `price` — цена варианта (если отличается от basePrice товара)\n- `stockQty` — количество на складе\n- `reservedQty` — зарезервировано в неотправленных заказах (управляется автоматически при оформлении заказа)\n\n**Доступный остаток:** `availableQty = stockQty - reservedQty`\n\n**Побочные эффекты:** сброс кеша каталога и карточки товара",
+        "operationId": "VariantController_create",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Вариант создан, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации, дублирующий SKU или несовпадение sizeType с productType."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать вариант товара",
+        "tags": [
+          "Admin — Варианты товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/variants/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление — цена, остаток, активность, SKU. При изменении SKU проверяется уникальность. При изменении stockQty пересчитывается доступность на витрине.\n\n**Влияние на витрину:** если `availableQty` падает до 0 — вариант пропадает из доступных. Если падает ниже `lowStockThreshold` из настроек — статус меняется на LOW_STOCK.\n\n**Побочные эффекты:** сброс кеша каталога и карточки товара",
+        "operationId": "VariantController_update",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор варианта",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVariantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Вариант обновлён, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации или дублирующий SKU."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар или вариант не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить вариант товара",
+        "tags": [
+          "Admin — Варианты товаров"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- **Soft delete** — проставляется `deletedAt`\n- Вариант пропадает с витрины, но сохраняется в БД\n- Заказы со снепшотами этого варианта не затрагиваются\n- Если у товара не остаётся доступных вариантов — товар пропадает из каталога витрины\n\n**Побочные эффекты:** сброс кеша каталога и карточки товара",
+        "operationId": "VariantController_remove",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор варианта",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Вариант soft-deleted, кеш сброшен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар или вариант не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить вариант товара",
+        "tags": [
+          "Admin — Варианты товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/media": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** просмотр всех изображений и видео привязанных к товару.\n\n**Ответ:** массив медиа с данными FileAsset (URL всех размеров), sortOrder, isMain, привязка к варианту (если есть).",
+        "operationId": "MediaController_findAll",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список медиа товара."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Медиа товара",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** привязка загруженного файла (из POST /admin/files/upload) к товару.\n\n**Бизнес-логика:**\n- `fileId` — id ранее загруженного FileAsset\n- `variantId` — опционально, привязка медиа к конкретному варианту (например фото конкретного цвета)\n- `mediaType` — IMAGE или VIDEO\n- `sortOrder` — порядок отображения в галерее\n- `isMain` — если `true`, сбрасывает `isMain` у остальных медиа товара (только одно основное фото, оно показывается в каталоге)",
+        "operationId": "MediaController_create",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Медиа привязано к товару."
+          },
+          "400": {
+            "description": "Ошибка валидации или файл не найден."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Привязать медиа к товару",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/media/reorder": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** drag-and-drop сортировка галереи товара в админке.\n\n**Тело:** массив `[{ id, sortOrder }]` — новый порядок для всех медиа товара.",
+        "operationId": "MediaController_reorder",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Порядок медиа обновлён."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Изменить порядок медиа",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/media/{id}/main": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** назначает медиа основным (`isMain: true`). У всех остальных медиа этого товара `isMain` сбрасывается. Основное медиа отображается как превью в каталоге и карточке товара.",
+        "operationId": "MediaController_setMain",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор медиа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Основное медиа обновлено."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар или медиа не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Сделать медиа основным",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/media/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление — sortOrder, variantId, isMain.",
+        "operationId": "MediaController_update",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор медиа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Медиа обновлено."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар или медиа не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить медиа товара",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** удаляет привязку медиа к товару (запись ProductMedia). Сам файл (FileAsset) НЕ удаляется — для этого используйте DELETE /admin/files/:id.",
+        "operationId": "MediaController_remove",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор медиа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Привязка медиа удалена."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Товар или медиа не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить медиа товара",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      }
+    },
+    "/storefront/products": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** главная страница каталога, страницы категорий, результаты поиска.\n\n**Видимость товаров:** только active + not deleted + с ≥1 доступным вариантом (active, not deleted, availableQty > 0).\n\n**Фильтры:**\n- `category` — slug или id категории (если родительская → включает дочерние)\n- `productType` — CLOTHING / SHOES / ACCESSORY\n- `size`, `color` — id размера/цвета\n- `brand`, `season`, `material` — строковые фильтры\n- `priceMin`, `priceMax` — диапазон цен\n- `isNew`, `isHit`, `isSeasonal` — флаги\n\n**Поиск:** `search` — по name, slug, sku, brand (частичное совпадение)\n**Сортировка:** `sort` — newest, price_asc, price_desc, name_asc\n**Пагинация:** `page`, `limit`\n\n**Ответ:**\n- `items[]` — товары с main media, effectivePrice (min цена среди доступных вариантов), availabilityStatus (IN_STOCK / LOW_STOCK)\n- `totalCount` — общее количество товаров по фильтрам\n- `filters` — доступные значения фильтров с количеством: sizes[], colors[], brands[], seasons[], materials[], priceRange. Каждый фильтр считается исключая сам себя (чтобы не обнулялись варианты)\n\n**Кеш:** ключи `catalog:{hash}:{page}` (60 сек) и `filters:{hash}` (60 сек). Сбрасывается при изменении товаров/вариантов/категорий.",
+        "operationId": "StorefrontController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Каталог с фильтрами и пагинацией."
+          },
+          "400": {
+            "description": "Некорректные параметры запроса."
+          }
+        },
+        "summary": "Каталог товаров",
+        "tags": [
+          "Storefront — Товары"
+        ]
+      }
+    },
+    "/storefront/products/{slug}": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** страница товара на витрине.\n\n**Ответ:**\n- Все поля товара (name, description, brand, season, material, care и т.д.)\n- Доступные варианты: size, color, price, availableQty, availabilityStatus\n- Медиа: изображения и видео по sortOrder\n- Категория с breadcrumb (parent → child → товар)\n- SEO: metaTitle, metaDescription\n- averageRating, reviewCount (из одобренных отзывов)\n\n**Доступные варианты:** только active, not deleted, availableQty > 0. Недоступные варианты не показываются покупателю.\n\n**Кеш:** ключ `product:{slug}`, TTL 120 сек. Сбрасывается при изменении товара или его вариантов.",
+        "operationId": "StorefrontController_findBySlug",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug товара (из URL)",
+            "schema": {
+              "example": "kurtka-zymova-nike",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Полные данные карточки товара."
+          },
+          "404": {
+            "description": "Товар не найден, неактивен или удалён."
+          }
+        },
+        "summary": "Карточка товара",
+        "tags": [
+          "Storefront — Товары"
+        ]
+      }
+    },
+    "/storefront/products/{slug}/related": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** блоки рекомендаций на карточке товара для увеличения среднего чека.\n\n**Ответ:**\n- `boughtTogether[]` — товары, которые встречались в одних заказах с текущим. Сортировка по частоте совместных покупок, лимит 8\n- `similar[]` — товары из той же категории/productType/brand, исключая текущий, лимит 8. Используется всегда как дополнительный блок\n\nОба блока: только active + not deleted + с доступными вариантами. Формат как ProductCard (main media, effectivePrice, availabilityStatus).\n\n**Кеш:** ключ `related:{slug}`, TTL 120 сек. Сбрасывается при изменении товаров и при доставке заказов (новые данные о совместных покупках).",
+        "operationId": "StorefrontController_findRelated",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug товара",
+            "schema": {
+              "example": "kurtka-zymova-nike",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ boughtTogether: ProductCard[], similar: ProductCard[] }"
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "summary": "Похожие товары и «с этим покупают»",
+        "tags": [
+          "Storefront — Товары"
+        ]
+      }
+    },
+    "/admin/categories/{categoryId}/size-chart": {
+      "put": {
+        "operationId": "SizeChartController_upsert",
+        "parameters": [
+          {
+            "name": "categoryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertSizeChartDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Размерная сетка сохранена."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Категория не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать или обновить размерную сетку категории",
+        "tags": [
+          "Admin — Размерные сетки"
+        ]
+      },
+      "get": {
+        "operationId": "SizeChartController_findByCategoryId",
+        "parameters": [
+          {
+            "name": "categoryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Размерная сетка получена."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Получить размерную сетку категории",
+        "tags": [
+          "Admin — Размерные сетки"
+        ]
+      }
+    },
+    "/storefront/categories/{categoryId}/size-chart": {
+      "get": {
+        "operationId": "SizeChartStorefrontController_findByCategoryId",
+        "parameters": [
+          {
+            "name": "categoryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "summary": "Размерная сетка категории (публичный)",
+        "tags": [
+          "Storefront — Размерные сетки"
+        ]
+      }
+    },
+    "/storefront/favorites": {
+      "get": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Зачем:** страница «Избранное» в личном кабинете или на витрине.\n\n**Бизнес-логика:**\n- Возвращаются только товары с доступными вариантами (active, not deleted, availableQty > 0)\n- Товары без доступных вариантов автоматически исключаются из списка (но запись Favorite остаётся — товар вернётся когда появится в наличии)\n\n**Ответ:** пагинированный список товаров с main media, effectivePrice, availabilityStatus.",
+        "operationId": "FavoriteController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список избранного с пагинацией."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список избранных товаров",
+        "tags": [
+          "Storefront — Избранное"
+        ]
+      }
+    },
+    "/storefront/favorites/check": {
+      "get": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Зачем:** при отображении каталога — показать иконку сердечка на товарах которые уже в избранном. Вызывается фронтендом при загрузке страницы каталога с массивом id видимых товаров.\n\n**Query:** `productIds=1,2,3,4,5`\n**Ответ:** `{ 1: true, 3: true }` — только id которые в избранном.",
+        "operationId": "FavoriteController_check",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Словарь productId → true для товаров в избранном."
+          },
+          "400": {
+            "description": "Некорректные productIds."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Проверить товары в избранном",
+        "tags": [
+          "Storefront — Избранное"
+        ]
+      }
+    },
+    "/storefront/favorites/recommendations": {
+      "get": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Зачем:** персональные рекомендации — «Вам может понравиться» на основе категорий, типов и брендов товаров в избранном.\n\n**Алгоритм:**\n1. Собираются categoryId, productType, brand из товаров в избранном\n2. Выбираются товары с совпадением по этим критериям, которых нет в избранном\n3. Сортировка: больше совпадений → выше; при равенстве — isNew/isHit выше; затем random\n4. Только active + not deleted + с доступными вариантами\n\n**Ответ:** до 12 товаров в формате ProductCard.",
+        "operationId": "FavoriteController_recommendations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Персональные рекомендации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Рекомендации на основе избранного",
+        "tags": [
+          "Storefront — Избранное"
+        ]
+      }
+    },
+    "/storefront/favorites/{productId}": {
+      "post": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:**\n- Проверяется что товар существует, активен и не удалён\n- Создаётся запись Favorite (userId + productId, composite unique)\n- Если уже в избранном — идемпотентно, ошибки не будет",
+        "operationId": "FavoriteController_add",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Товар добавлен в избранное."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "404": {
+            "description": "Товар не найден, неактивен или удалён."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Добавить в избранное",
+        "tags": [
+          "Storefront — Избранное"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:** физическое удаление записи Favorite. Если товара нет в избранном — идемпотентно, 204.",
+        "operationId": "FavoriteController_remove",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Товар удалён из избранного."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить из избранного",
+        "tags": [
+          "Storefront — Избранное"
+        ]
+      }
+    },
+    "/storefront/orders": {
+      "post": {
+        "description": "**Доступ:** публичный (гость) или авторизованный (JWT)\n\n**Зачем:** оформление заказа из корзины. Центральная бизнес-операция магазина.\n\n**Идемпотентность:** заголовок `x-idempotency-key` (UUID) предотвращает повторное создание заказа при ретрае. Если заказ с таким ключом уже существует — возвращается 200 с существующим заказом.\n\n**Бизнес-логика:**\n1. Проверяется идемпотентность (если ключ передан)\n2. Получается корзина (по userId или sessionId)\n3. Для каждого CartItem:\n   - Проверяется вариант: существует, активен, не удалён\n   - Проверяется остаток: `availableQty ≥ quantity`\n   - Если нет — ошибка 400 с указанием проблемных позиций\n4. Создаётся Order:\n   - `orderNumber`: ORD-YYYYMMDD-00001 (автоинкремент за день)\n   - `status`: NEW\n   - Финансы: subtotal, discount (personalDiscountPercent пользователя), deliveryAmount, totalAmount, totalCost, grossProfit, netProfit\n5. Создаются OrderItems со **снепшотами**: productName, category, type, sku, size, color, salePrice, purchaseCost, qty, lineRevenue/Cost/Profit\n6. `reservedQty` вариантов увеличивается на заказанное количество\n7. OrderStatusHistory: null → NEW\n8. Корзина очищается\n9. Telegram уведомление админу\n\n**Данные доставки:** передаются в теле (`customerName`, `customerPhone`, `customerEmail`, `deliveryProvider`, `city`, `warehouse` и т.д.) ИЛИ `deliveryProfileId` — данные копируются из сохранённого профиля.\n\n**Скидка:** если пользователь авторизован и имеет `personalDiscountPercent` > 0, скидка применяется автоматически.",
+        "operationId": "OrderController_createOrder",
+        "parameters": [
+          {
+            "name": "x-idempotency-key",
+            "in": "header",
+            "description": "UUID для защиты от повторного создания заказа при ретрае",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Возвращён ранее созданный заказ (идемпотентный повтор)."
+          },
+          "201": {
+            "description": "Заказ создан, корзина очищена, Telegram уведомление отправлено."
+          },
+          "400": {
+            "description": "Корзина пуста, недостаточный остаток или ошибка валидации."
+          }
+        },
+        "summary": "Оформить заказ",
+        "tags": [
+          "Storefront — Заказы"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/storefront/orders/{id}/tracking": {
+      "get": {
+        "description": "Возвращает данные трекинга из API службы доставки",
+        "operationId": "OrderController_getOrderTracking",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Информация о доставке"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Заказ не найден"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Получить информацию о доставке",
+        "tags": [
+          "Storefront — Заказы"
+        ]
+      }
+    },
+    "/admin/orders": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление заказами — просмотр, фильтрация, поиск.\n\n**Фильтры:**\n- `status` — NEW, CONFIRMED, SHIPPED, DELIVERED, CANCELLED, RETURNED\n- `dateFrom`, `dateTo` — диапазон дат создания\n- `search` — по orderNumber, customerName, customerPhone, customerEmail\n\n**Сортировка:** по дате создания (newest first по умолчанию)\n**Пагинация:** `page`, `limit`\n\n**Ответ:** items[] с orderNumber, status, customerName, totalAmount, itemsCount, createdAt + totalCount для пагинации.",
+        "operationId": "AdminOrderController_getOrders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список заказов с фильтрами и пагинацией."
+          },
+          "400": {
+            "description": "Некорректные параметры запроса."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список заказов",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      }
+    },
+    "/admin/orders/{id}": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Ответ:** полные данные заказа:\n- Финансы: subtotal, discount, deliveryAmount, totalAmount, totalCost, grossProfit, netProfit\n- Items[] со снепшотами: productName, category, type, sku, size, color, salePrice, purchaseCost, qty, lineRevenue/Cost/Profit\n- Данные доставки: customerName/Phone/Email, deliveryProvider, city, warehouse, addressLine\n- StatusHistory[]: хронология смен статусов (oldStatus → newStatus, createdAt)\n- Пользователь (если авторизован): id, email, firstName, lastName\n- idempotencyKey, comment",
+        "operationId": "AdminOrderController_getOrderById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор заказа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Полные данные заказа."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Заказ не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Детали заказа",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** изменить данные доставки, комментарий, стоимость доставки. Редактирование позиций не поддерживается (снепшоты неизменны).\n\n**Редактируемые поля:** customerName, customerPhone, customerEmail, deliveryProvider, city, warehouse, addressLine, deliveryAmount, comment.\n\n**Бизнес-логика:** при изменении deliveryAmount пересчитывается totalAmount.",
+        "operationId": "AdminOrderController_updateOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор заказа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Заказ обновлён."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Заказ не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Редактировать заказ",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      }
+    },
+    "/admin/orders/{id}/tracking": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** отслеживание статуса доставки по ТТН Новой Почты.\n\n**Условия:**\n- У заказа должен быть заполнен trackingNumber\n- Делается запрос к API Новой Почты\n\n**Ответ:** ttn, statusCode, statusDescription или null (если ТТН не указан или запрос неудачен).",
+        "operationId": "AdminOrderController_getOrderTracking",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор заказа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Информация об отслеживании получена."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Заказ не найден или ТТН не указан."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Получить статус отслеживания посылки",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      }
+    },
+    "/admin/orders/{id}/status": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** продвижение заказа по воронке: NEW → CONFIRMED → SHIPPED → DELIVERED. Или отмена/возврат.\n\n**Допустимые переходы:**\n- `NEW` → CONFIRMED, CANCELLED\n- `CONFIRMED` → SHIPPED, CANCELLED\n- `SHIPPED` → DELIVERED, RETURNED\n- `DELIVERED` → RETURNED\n- `CANCELLED` и `RETURNED` — финальные, менять нельзя\n\n**Побочные эффекты при CANCELLED/RETURNED:**\n1. `reservedQty` вариантов уменьшается на qty заказа (товар возвращается в доступные остатки)\n2. Финансовая запись корректируется (для отчётов)\n\n**Побочные эффекты при DELIVERED:**\n1. `stockQty` вариантов уменьшается, `reservedQty` уменьшается (товар физически отгружен)\n2. Заказ попадает в финансовый отчёт как реализованный\n\nСоздаётся запись в OrderStatusHistory (oldStatus → newStatus).",
+        "operationId": "AdminOrderController_updateOrderStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор заказа",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrderStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Статус обновлён, остатки скорректированы."
+          },
+          "400": {
+            "description": "Недопустимый переход статусов или ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Заказ не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Изменить статус заказа",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      }
+    },
+    "/delivery/cities": {
+      "get": {
+        "operationId": "DeliveryController_searchCities",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Search Nova Poshta cities",
+        "tags": [
+          "Delivery"
+        ]
+      }
+    },
+    "/delivery/warehouses": {
+      "get": {
+        "operationId": "DeliveryController_searchWarehouses",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Search Nova Poshta warehouses",
+        "tags": [
+          "Delivery"
+        ]
+      }
+    },
+    "/storefront/products/{productId}/reviews": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** блок отзывов на карточке товара.\n\n**Бизнес-логика:**\n- Возвращаются только **одобренные** отзывы (`status: APPROVED`)\n- Пагинация по корневым отзывам (offset + limit)\n- Ответы админа (depth=1) вложены в корневой отзыв как массив `replies[]`\n- Каждый отзыв содержит: rating, text, createdAt, user (firstName, lastName, avatarUrl)\n\n**Структура:** плоский список корневых отзывов, у каждого поле `replies[]` с ответами.",
+        "operationId": "ReviewController_getProductReviews",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список одобренных отзывов с ответами."
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "summary": "Отзывы о товаре",
+        "tags": [
+          "Storefront — Отзывы"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** авторизованный пользователь (JWT)\n\n**Бизнес-логика:**\n- `rating` — от 1 до 5 звёзд\n- `text` — текст отзыва\n- Отзыв создаётся с `depth: 0` (корневой) и `status: PENDING`\n- **Один корневой отзыв на пользователя на товар** — повторный → ошибка 400\n- Отзыв появится на витрине только после одобрения админом (`status: APPROVED`)\n\n**Побочные эффекты:**\n- Telegram уведомление админу о новом отзыве (товар, рейтинг, текст)\n- После одобрения пересчитываются averageRating и reviewCount товара",
+        "operationId": "ReviewController_createReview",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Отзыв создан со статусом PENDING, ожидает модерации."
+          },
+          "400": {
+            "description": "Ошибка валидации или пользователь уже оставил отзыв на этот товар."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оставить отзыв",
+        "tags": [
+          "Storefront — Отзывы"
+        ]
+      }
+    },
+    "/admin/reviews": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** модерация отзывов — просмотр новых, одобрение, отклонение.\n\n**Фильтры:**\n- `status` — PENDING (новые, ждут модерации), APPROVED, REJECTED\n- `productId` — отзывы конкретного товара\n\n**Ответ:** все отзывы (включая PENDING и REJECTED) с данными пользователя, товара, рейтинг, текст, дата.",
+        "operationId": "AdminReviewController_getAdminReviews",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список отзывов с фильтрами."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список отзывов",
+        "tags": [
+          "Admin — Отзывы"
+        ]
+      }
+    },
+    "/admin/reviews/{id}/status": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** одобрить или отклонить отзыв покупателя.\n\n**Бизнес-логика:**\n- `status`: `APPROVED` — отзыв появляется на витрине, `REJECTED` — скрывается\n- При одобрении пересчитываются `averageRating` и `reviewCount` товара\n- При отклонении ранее одобренного — также пересчёт\n\n**Статусы:**\n- `PENDING` → `APPROVED` или `REJECTED`\n- `APPROVED` → `REJECTED` (убрать с витрины)\n- `REJECTED` → `APPROVED` (вернуть)",
+        "operationId": "AdminReviewController_updateReviewStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор отзыва",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReviewStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Статус отзыва обновлён, рейтинг товара пересчитан."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Отзыв не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Модерация отзыва",
+        "tags": [
+          "Admin — Отзывы"
+        ]
+      }
+    },
+    "/admin/reviews/{reviewId}/reply": {
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** публичный ответ магазина на отзыв покупателя. Отображается на витрине под отзывом.\n\n**Бизнес-логика:**\n- Создаётся отзыв с `depth: 1`, `parentId` = id корневого отзыва\n- `status: APPROVED` (ответ админа публикуется сразу)\n- Проверяется что родительский отзыв имеет `depth: 0` (нельзя отвечать на ответ — только 2 уровня)\n- Рейтинг не указывается (это ответ, не оценка)",
+        "operationId": "AdminReviewController_replyToReview",
+        "parameters": [
+          {
+            "name": "reviewId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор корневого отзыва",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminReplyReviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Ответ создан и сразу опубликован."
+          },
+          "400": {
+            "description": "Ошибка валидации или попытка ответить на ответ (depth > 0)."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Отзыв не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ответить на отзыв",
+        "tags": [
+          "Admin — Отзывы"
+        ]
+      }
+    },
+    "/admin/hero-slides": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление hero-баннером — просмотр всех слайдов включая неактивные.\n\n**Отличие от витрины:** показывает ВСЕ слайды (включая `isActive: false`) с полными данными для редактирования.",
+        "operationId": "AdminHeroSlideController_getHeroSlides",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Все слайды включая неактивные."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список всех слайдов",
+        "tags": [
+          "Admin — Слайды главного экрана"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Поля:**\n- `title`, `subtitle` — текст на слайде\n- `buttonText`, `buttonLink` — CTA кнопка (например «Перейти в каталог» → /catalog/new)\n- `desktopImageFileId`, `mobileImageFileId` — id загруженных файлов (из POST /admin/files/upload)\n- `overlayOpacity` — затемнение фона под текстом (0–1)\n- `sortOrder` — порядок в слайдере\n- `isActive` — показывать на витрине\n\n**Побочные эффекты:** сброс кеша hero-slides",
+        "operationId": "AdminHeroSlideController_createHeroSlide",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateHeroSlideDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Слайд создан, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать слайд",
+        "tags": [
+          "Admin — Слайды главного экрана"
+        ]
+      }
+    },
+    "/admin/hero-slides/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление любых полей. Для быстрого включения/выключения — передать только `{ isActive: false }`.\n\n**Побочные эффекты:** сброс кеша hero-slides",
+        "operationId": "AdminHeroSlideController_updateHeroSlide",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор слайда",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateHeroSlideDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Слайд обновлён, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Слайд не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить слайд",
+        "tags": [
+          "Admin — Слайды главного экрана"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** физическое удаление слайда. Файлы (FileAsset) НЕ удаляются автоматически — для очистки использовать DELETE /admin/files/:id.\n\n**Побочные эффекты:** сброс кеша hero-slides",
+        "operationId": "AdminHeroSlideController_deleteHeroSlide",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор слайда",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Слайд удалён, кеш сброшен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Слайд не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить слайд",
+        "tags": [
+          "Admin — Слайды главного экрана"
+        ]
+      }
+    },
+    "/storefront/hero-slides": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** hero-баннер на главной странице — слайдер с акциями, новинками, сезонными коллекциями.\n\n**Бизнес-логика:**\n- Возвращаются только активные слайды (`isActive: true`)\n- Сортировка по `sortOrder`\n- Каждый слайд: title, subtitle, buttonText, buttonLink, imageUrl (десктоп + мобильная версия), overlayOpacity\n\n**Кеш:** ключ `homepage:hero-slides`, TTL 120 сек. Сбрасывается при любом изменении слайдов в админке.",
+        "operationId": "HeroSlideController_getHeroSlides",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Массив активных слайдов."
+          }
+        },
+        "summary": "Слайды главного экрана",
+        "tags": [
+          "Storefront — Слайды главного экрана"
+        ]
+      }
+    },
+    "/admin/pages": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление статическими страницами магазина — «Про нас», «Доставка і оплата», «Обмін і повернення», «Контакти» и т.д.\n\n**Ответ:** все страницы (включая неопубликованные) с slug, title, status (DRAFT/PUBLISHED), createdAt, updatedAt.",
+        "operationId": "AdminPagesController_getPages",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список всех страниц."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список страниц",
+        "tags": [
+          "Admin — Страницы"
+        ]
+      }
+    },
+    "/admin/pages/{slug}": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Ответ:** полные данные страницы включая HTML-контент, SEO мета-теги (metaTitle, metaDescription), статус публикации.",
+        "operationId": "AdminPagesController_getPage",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug страницы (URL-friendly идентификатор)",
+            "schema": {
+              "example": "about"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Данные страницы."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Страница не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Страница по slug",
+        "tags": [
+          "Admin — Страницы"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:**\n- `slug` берётся из URL параметра и должен быть уникальным\n- Контент хранится как HTML (редактируется через WYSIWYG-редактор в админке)\n- Создаётся со статусом DRAFT — не видна на витрине до публикации\n\n**Поля:**\n- `title` — заголовок страницы\n- `content` — HTML-контент\n- `metaTitle`, `metaDescription` — SEO мета-теги\n- `status` — DRAFT или PUBLISHED",
+        "operationId": "AdminPagesController_createPage",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug страницы",
+            "schema": {
+              "example": "delivery-and-payment"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Страница создана."
+          },
+          "400": {
+            "description": "Ошибка валидации или slug уже занят."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать страницу",
+        "tags": [
+          "Admin — Страницы"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление — title, content, metaTitle, metaDescription, status. Для публикации — передать `{ status: \"PUBLISHED\" }`.",
+        "operationId": "AdminPagesController_updatePage",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug страницы",
+            "schema": {
+              "example": "about"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Страница обновлена."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Страница не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить страницу",
+        "tags": [
+          "Admin — Страницы"
+        ]
+      }
+    },
+    "/storefront/pages/{slug}": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** отображение статических страниц на витрине — «Про нас», «Доставка і оплата», «Обмін і повернення» и т.д.\n\n**Бизнес-логика:**\n- Возвращаются только страницы со статусом `PUBLISHED`\n- Страница с `status: DRAFT` → 404\n\n**Ответ:** title, content (HTML), metaTitle, metaDescription.",
+        "operationId": "StorefrontPagesController_getPage",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "Slug страницы",
+            "schema": {
+              "example": "about"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Опубликованная страница."
+          },
+          "404": {
+            "description": "Страница не найдена или не опубликована."
+          }
+        },
+        "summary": "Статическая страница",
+        "tags": [
+          "Storefront — Страницы"
+        ]
+      }
+    },
+    "/admin/promo-blocks": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** управление промо-блоками — просмотр всех включая неактивные.\n\n**Отличие от витрины:** показывает ВСЕ блоки (включая `isActive: false`), количество привязанных товаров, даты создания/обновления.",
+        "operationId": "AdminPromoBlocksController_getPromoBlocks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Все промо-блоки."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список промо-блоков",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Поля:**\n- `title` — заголовок блока («Новинки», «Хіти продажів»)\n- `type` — NEW, HIT, SEASONAL, CUSTOM\n- `sortOrder` — порядок отображения на странице\n- `isActive` — показывать на витрине\n- `imageFileId` — опционально, фоновое изображение блока\n\n**Для типов NEW/HIT/SEASONAL:** товары подтягиваются автоматически по соответствующему флагу.\n**Для CUSTOM:** товары привязываются вручную через POST :id/products.\n\n**Побочные эффекты:** сброс кеша промо-блоков",
+        "operationId": "AdminPromoBlocksController_createPromoBlock",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromoBlockDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Промо-блок создан, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать промо-блок",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      }
+    },
+    "/admin/promo-blocks/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление — title, sortOrder, isActive, imageFileId. Тип (`type`) изменить нельзя — это определяет логику наполнения.\n\n**Побочные эффекты:** сброс кеша промо-блоков",
+        "operationId": "AdminPromoBlocksController_updatePromoBlock",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор промо-блока",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePromoBlockDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Промо-блок обновлён, кеш сброшен."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Промо-блок не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить промо-блок",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** физическое удаление промо-блока и всех связей PromoBlockProduct. Файлы (FileAsset) НЕ удаляются.\n\n**Побочные эффекты:** сброс кеша промо-блоков",
+        "operationId": "AdminPromoBlocksController_deletePromoBlock",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор промо-блока",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Промо-блок удалён, кеш сброшен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Промо-блок не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить промо-блок",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      }
+    },
+    "/admin/promo-blocks/{id}/products": {
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** наполнение CUSTOM промо-блоков вручную. Для NEW/HIT/SEASONAL — товары подтягиваются автоматически, но можно дополнительно привязать вручную.\n\n**Бизнес-логика:**\n- Проверяется что товар существует и активен\n- Создаётся запись PromoBlockProduct (promoBlockId + productId, composite unique)\n- Если уже привязан — ошибка 400\n\n**Побочные эффекты:** сброс кеша промо-блоков",
+        "operationId": "AdminPromoBlocksController_addProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор промо-блока",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromoBlockLinkProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Товар привязан к промо-блоку, кеш сброшен."
+          },
+          "400": {
+            "description": "Товар уже привязан или ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Промо-блок или товар не найден."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Привязать товар к промо-блоку",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** удаляет запись PromoBlockProduct. Сам товар не затрагивается.\n\n**Побочные эффекты:** сброс кеша промо-блоков",
+        "operationId": "AdminPromoBlocksController_removeProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор промо-блока",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePromoBlockLinkProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Товар отвязан от промо-блока, кеш сброшен."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Промо-блок или связь не найдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Отвязать товар от промо-блока",
+        "tags": [
+          "Admin — Промо-блоки"
+        ]
+      }
+    },
+    "/storefront/promo-blocks": {
+      "get": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** секции на главной странице и страницах каталога — «Новинки», «Хіти продажів», «Сезонна колекція», кастомные подборки.\n\n**Типы промо-блоков:**\n- `NEW` — товары с флагом `isNew: true`\n- `HIT` — товары с флагом `isHit: true`\n- `SEASONAL` — товары с флагом `isSeasonal: true`\n- `CUSTOM` — ручная подборка товаров (привязываются через admin POST :id/products)\n\n**Фильтр:** `type` — получить блоки конкретного типа. Без фильтра — все активные.\n\n**Бизнес-логика:**\n- Возвращаются только активные блоки (`isActive: true`)\n- Сортировка по `sortOrder`\n- Товары в каждом блоке: только active + not deleted + с доступными вариантами\n- Формат товаров: ProductCard (main media, effectivePrice, availabilityStatus)\n\n**Кеш:** ключ `homepage:promo-blocks:{type|all}`, TTL 120 сек. Сбрасывается при изменении промо-блоков или привязанных товаров.",
+        "operationId": "StorefrontPromoBlocksController_getPromoBlocks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Массив промо-блоков с товарами."
+          },
+          "400": {
+            "description": "Некорректный параметр type."
+          }
+        },
+        "summary": "Промо-блоки витрины",
+        "tags": [
+          "Storefront — Промо-блоки"
+        ]
+      }
+    },
+    "/storefront/feedback": {
+      "post": {
+        "description": "**Доступ:** публичный\n\n**Зачем:** форма обратной связи на витрине — вопросы, жалобы, предложения.\n\n**Бизнес-логика:**\n1. Создаётся запись Feedback с `status: NEW`\n2. Сохраняется IP отправителя (для защиты от спама и идентификации)\n3. Telegram уведомление админу: имя, email, тема, текст\n\n**Поля:** name, email, phone (опционально), subject, message",
+        "operationId": "FeedbackController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFeedbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Обращение отправлено."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          }
+        },
+        "summary": "Отправить обращение",
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/admin/feedback": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** обработка обращений покупателей.\n\n**Фильтры:**\n- `status` — NEW (новые), IN_PROGRESS (в работе), RESOLVED (решено), SPAM\n- `page`, `limit` — пагинация\n\n**Ответ:** items[] с name, email, phone, subject, message, ip, status, createdAt + totalCount.",
+        "operationId": "FeedbackController_findAll",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Статус обращения",
+            "schema": {
+              "enum": [
+                "NEW",
+                "IN_PROGRESS",
+                "DONE"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "Номер страницы",
+            "schema": {
+              "example": "1",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Количество на странице",
+            "schema": {
+              "example": "20",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список обращений с пагинацией."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список обращений",
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/admin/feedback/{id}/status": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Статусы:** NEW → IN_PROGRESS → RESOLVED. Или NEW/IN_PROGRESS → SPAM (для спам-обращений).",
+        "operationId": "FeedbackController_updateStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор обращения",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFeedbackStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Статус обновлён."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Обращение не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить статус обращения",
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/admin/feedback/{id}": {
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** soft delete — проставляется `deletedAt`. Обращение скрывается из списка, но сохраняется в БД. Для восстановления — PATCH restore.",
+        "operationId": "FeedbackController_softDelete",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор обращения",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Обращение soft-deleted."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Обращение не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить обращение",
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/admin/feedback/{id}/restore": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** убирает `deletedAt`, обращение снова появляется в списке.",
+        "operationId": "FeedbackController_restore",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор обращения",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Обращение восстановлено."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Обращение не найдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Восстановить обращение",
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/admin/expenses": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** учёт операционных расходов магазина — реклама, упаковка, зарплата, аренда, логистика и т.д. Используется для расчёта чистой прибыли в финансовых отчётах.\n\n**Фильтры:**\n- `category` — категория расхода (ADVERTISING, PACKAGING, SALARY, RENT, LOGISTICS, OTHER)\n- `dateFrom`, `dateTo` — диапазон дат\n- `search` — по описанию\n\n**Сортировка:** по дате (newest first)\n**Пагинация:** `page`, `limit`\n\n**Ответ:** items[] с id, category, amount, description, date, createdAt + totalCount + totalAmount (сумма по фильтрам).",
+        "operationId": "ExpenseController_getExpenses",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список витрат з пагінацією та загальною сумою."
+          },
+          "400": {
+            "description": "Некорректные параметры запроса."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список витрат",
+        "tags": [
+          "Admin — Витрати"
+        ]
+      },
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** фиксация расхода для финансового учёта.\n\n**Поля:**\n- `category` — категория расхода (enum)\n- `amount` — сумма в основной валюте магазина (UAH)\n- `description` — описание (что, зачем, кому)\n- `date` — дата расхода (может отличаться от даты создания записи)",
+        "operationId": "ExpenseController_createExpense",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExpenseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Витрата створена."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать витрату",
+        "tags": [
+          "Admin — Витрати"
+        ]
+      }
+    },
+    "/admin/expenses/{id}": {
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** частичное обновление — category, amount, description, date.",
+        "operationId": "ExpenseController_updateExpense",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор витрати",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExpenseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Витрата оновлена."
+          },
+          "400": {
+            "description": "Ошибка валидации."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Витрата не знайдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить витрату",
+        "tags": [
+          "Admin — Витрати"
+        ]
+      },
+      "delete": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** фізичне видалення запису. Вплине на фінансові звіти за відповідний період.",
+        "operationId": "ExpenseController_deleteExpense",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор витрати",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Витрата видалена."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          },
+          "404": {
+            "description": "Витрата не знайдена."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити витрату",
+        "tags": [
+          "Admin — Витрати"
+        ]
+      }
+    },
+    "/admin/reports/summary": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** головний фінансовий звіт за період — виручка, собівартість, валовий прибуток, витрати, чистий прибуток.\n\n**Параметри:**\n- `dateFrom`, `dateTo` — період звіту (обов'язково)\n\n**Розрахунок (на основі DELIVERED заказів):**\n- `revenue` — сума totalAmount доставлених замовлень\n- `cost` — сума totalCost (собівартість товарів)\n- `grossProfit` — revenue - cost\n- `expenses` — сума всіх витрат (Expense) за період\n- `netProfit` — grossProfit - expenses\n- `ordersCount` — кількість доставлених замовлень\n- `averageOrderAmount` — revenue / ordersCount\n- `marginPercent` — (grossProfit / revenue) × 100\n\n**Важливо:** враховуються тільки замовлення зі статусом DELIVERED, де `updatedAt` (дата доставки) потрапляє в період.",
+        "operationId": "ReportController_getSummary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Зведений фінансовий звіт."
+          },
+          "400": {
+            "description": "Не вказано dateFrom/dateTo."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Зведений фінансовий звіт",
+        "tags": [
+          "Admin — Фінансові звіти"
+        ]
+      }
+    },
+    "/admin/reports/by-day": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** графік динаміки продажів — виручка, кількість замовлень, прибуток по днях. Для побудови лінійних/стовпчикових графіків в дашборді.\n\n**Параметри:** `dateFrom`, `dateTo`\n\n**Ответ:** масив `[{ date, revenue, cost, grossProfit, expenses, netProfit, ordersCount }]` — по одному елементу на кожен день періоду. Дні без замовлень включаються з нульовими значеннями.",
+        "operationId": "ReportController_getByDay",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Масив даних по днях."
+          },
+          "400": {
+            "description": "Не вказано dateFrom/dateTo."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Звіт по днях",
+        "tags": [
+          "Admin — Фінансові звіти"
+        ]
+      }
+    },
+    "/admin/reports/by-category": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** аналітика продажів по категоріях товарів — яка категорія приносить більше виручки/прибутку.\n\n**Параметри:** `dateFrom`, `dateTo`\n\n**Ответ:** масив `[{ categoryId, categoryName, revenue, cost, grossProfit, ordersCount, itemsSold }]` — агреговані дані по категоріях з OrderItem снепшотів.",
+        "operationId": "ReportController_getByCategory",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Масив даних по категоріях."
+          },
+          "400": {
+            "description": "Не вказано dateFrom/dateTo."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Звіт по категоріях",
+        "tags": [
+          "Admin — Фінансові звіти"
+        ]
+      }
+    },
+    "/admin/reports/by-product": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** топ товарів за період — які товари продаються найкраще, які найприбутковіші.\n\n**Параметри:** `dateFrom`, `dateTo`\n\n**Ответ:** масив `[{ productId, productName, sku, revenue, cost, grossProfit, itemsSold, marginPercent }]` — відсортований по revenue DESC. Дані з OrderItem снепшотів (productName на момент замовлення).",
+        "operationId": "ReportController_getByProduct",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Масив даних по товарах."
+          },
+          "400": {
+            "description": "Не вказано dateFrom/dateTo."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Звіт по товарах",
+        "tags": [
+          "Admin — Фінансові звіти"
+        ]
+      }
+    },
+    "/admin/reports/expenses-by-category": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** аналітика витрат — скільки витрачено на рекламу, упаковку, зарплату тощо.\n\n**Параметри:** `dateFrom`, `dateTo`\n\n**Ответ:** масив `[{ category, totalAmount, count }]` — агреговані витрати по категоріях (ADVERTISING, PACKAGING, SALARY, RENT, LOGISTICS, OTHER).",
+        "operationId": "ReportController_getExpensesByCategory",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Масив витрат по категоріях."
+          },
+          "400": {
+            "description": "Не вказано dateFrom/dateTo."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Витрати по категоріях",
+        "tags": [
+          "Admin — Фінансові звіти"
+        ]
+      }
+    },
+    "/admin/dashboard": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** головний екран адмін-панелі — ключові метрики в реальному часі.\n\n**Ответ:**\n\n**today** — показники за сьогодні:\n- `ordersCount` — кількість нових замовлень\n- `revenue` — виручка (тільки DELIVERED)\n- `averageCheck` — середній чек\n\n**week** — показники за поточний тиждень (пн-нд):\n- Ті самі метрики + порівняння з минулим тижнем (`changePercent`)\n\n**month** — показники за поточний місяць:\n- Ті самі метрики + порівняння з минулим місяцем\n\n**pendingActions** — що потребує уваги:\n- `newOrders` — замовлення зі статусом NEW (потребують підтвердження)\n- `pendingReviews` — відгуки зі статусом PENDING (потребують модерації)\n- `newFeedback` — обращення зі статусом NEW\n- `lowStockVariants` — варіанти з availableQty ≤ lowStockThreshold\n\n**topProducts** — топ-5 товарів за тиждень по кількості проданих одиниць\n\n**recentOrders** — останні 5 замовлень (orderNumber, status, totalAmount, createdAt)",
+        "operationId": "DashboardController_getDashboard",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Дані дашборду."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Дашборд адмін-панелі",
+        "tags": [
+          "Admin — Дашборд"
+        ]
+      }
+    },
+    "/admin/notification-settings": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Зачем:** перегляд поточних налаштувань Telegram-сповіщень.\n\n**Ответ:**\n- `telegramBotToken` — токен бота (замаскований: перші 5 символів + ***)\n- `telegramChatId` — ID чату для сповіщень\n- `notifyOnNewOrder` — сповіщати про нові замовлення\n- `notifyOnNewReview` — сповіщати про нові відгуки\n- `notifyOnNewFeedback` — сповіщати про нові звернення\n- `notifyOnLowStock` — сповіщати про низькі залишки",
+        "operationId": "NotificationSettingsController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Налаштування сповіщень."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Поточні налаштування сповіщень",
+        "tags": [
+          "Admin — Налаштування сповіщень"
+        ]
+      },
+      "patch": {
+        "description": "**Доступ:** ADMIN\n\n**Бізнес-логіка:** часткове оновлення. Можна змінити окремі поля:\n- Токен бота та chatId — для зміни каналу сповіщень\n- Прапорці notifyOn* — для включення/вимкнення окремих типів сповіщень\n\n**Важливо:** при зміні telegramBotToken або telegramChatId — відправляється тестове повідомлення для перевірки з'єднання. Якщо бот не може відправити — помилка 400.",
+        "operationId": "NotificationSettingsController_updateSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNotificationSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Налаштування оновлено."
+          },
+          "400": {
+            "description": "Помилка валідації або не вдалось відправити тестове повідомлення."
+          },
+          "401": {
+            "description": "Потрібна авторизація."
+          },
+          "403": {
+            "description": "Доступ тільки для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити налаштування сповіщень",
+        "tags": [
+          "Admin — Налаштування сповіщень"
+        ]
+      }
+    },
+    "/admin/settings": {
+      "get": {
+        "description": "Возвращает текущие настройки приложения для административной панели. Доступно только пользователю с ролью ADMIN.",
+        "operationId": "SettingsAdminController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Настройки успешно получены."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Получить настройки",
+        "tags": [
+          "Admin — Настройки"
+        ]
+      },
+      "patch": {
+        "description": "Обновляет настройки приложения. Доступно только пользователю с ролью ADMIN.",
+        "operationId": "SettingsAdminController_updateSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Настройки успешно обновлены."
+          },
+          "400": {
+            "description": "Ошибка валидации входных данных."
+          },
+          "401": {
+            "description": "Требуется авторизация."
+          },
+          "403": {
+            "description": "Доступ только для ADMIN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить настройки",
+        "tags": [
+          "Admin — Настройки"
+        ]
+      }
+    },
+    "/storefront/settings": {
+      "get": {
+        "description": "Возвращает публично доступные настройки приложения для витрины.",
+        "operationId": "SettingsStorefrontController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Публичные настройки успешно получены."
+          }
+        },
+        "summary": "Получить публичные настройки",
+        "tags": [
+          "Storefront — Настройки"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Возвращает текущий статус приложения и доступность зависимостей.",
+        "operationId": "HealthController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Сервис работает корректно."
+          }
+        },
+        "summary": "Проверка состояния сервиса",
+        "tags": [
+          "System — Health"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Shop API",
+    "description": "API documentation for shop backend",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "in": "header"
+      },
+      "cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "refreshToken"
+      }
+    },
+    "schemas": {
+      "RegisterDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "admin@example.com",
+            "description": "Email пользователя"
+          },
+          "password": {
+            "type": "string",
+            "example": "secret123",
+            "description": "Пароль пользователя"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "ForgotPasswordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ResetPasswordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "AddCartItemDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateCartItemDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateProfileDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChangePasswordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateDeliveryProfileDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateDeliveryProfileDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAdminUserDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateSizeDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateSizeDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateColorDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateColorDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateCategoryDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateCategoryDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateProductDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateProductDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateVariantDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateVariantDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateMediaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ReorderMediaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateMediaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpsertSizeChartDto": {
+        "type": "object",
+        "properties": {
+          "columns": {
+            "description": "Заголовки колонок",
+            "example": [
+              "Розмір",
+              "Груди (см)",
+              "Талія (см)",
+              "Бедра (см)"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "description": "Строки таблицы (каждая строка — массив значений)",
+            "example": [
+              [
+                "S",
+                "84-88",
+                "64-68",
+                "90-94"
+              ],
+              [
+                "M",
+                "88-92",
+                "68-72",
+                "94-98"
+              ]
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "columns",
+          "rows"
+        ]
+      },
+      "CreateOrderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateOrderStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateOrderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateReviewStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "AdminReplyReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateHeroSlideDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateHeroSlideDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreatePageDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdatePageDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreatePromoBlockDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdatePromoBlockDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreatePromoBlockLinkProductDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "DeletePromoBlockLinkProductDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateFeedbackDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateFeedbackStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateExpenseDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateExpenseDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateNotificationSettingsDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateSettingsDto": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  }
+}

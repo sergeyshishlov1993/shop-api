@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea
+cookies.txt
+user-cookies.txt
+tmp-openapi
+tree_output.txt
+coverage

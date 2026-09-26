@@ -48,10 +48,11 @@ export class CouponService {
 
   /** Списывает использование внутри транзакции заказа. */
   async redeem(tx: Prisma.TransactionClient, code: string): Promise<void> {
-    await tx.coupon.update({
-      where: { code: this.normalize(code) },
-      data: { usedCount: { increment: 1 } },
-    });
+    // Атомарно: інкремент лише поки не досягнуто maxUses — паралельні замовлення не перевищать ліміт
+    const updated = await tx.$executeRaw`
+      UPDATE "Coupon" SET "usedCount" = "usedCount" + 1
+      WHERE "code" = ${this.normalize(code)} AND ("maxUses" IS NULL OR "usedCount" < "maxUses")`;
+    if (!updated) throw new BadRequestException('Ліміт використань промокоду вичерпано.');
   }
 
   // ─── Admin CRUD ───

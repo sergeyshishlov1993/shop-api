@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ConflictException,
     Injectable,
     NotFoundException,
     UnauthorizedException,
@@ -95,6 +96,10 @@ export class OrderService {
         });
 
         if (existingOrder) {
+            // Ключ повтору належить іншому власнику — не віддаємо чуже замовлення
+            if (existingOrder.userId !== (owner.userId ?? null)) {
+                throw new ConflictException('Idempotency key already used');
+            }
             return {
                 order: existingOrder,
                 isIdempotentReplay: true,
@@ -576,6 +581,8 @@ export class OrderService {
             }
 
             if (dto.newStatus === OrderStatus.RETURNED) {
+                // Після DELIVERED товар уже списано — повертаємо на склад; з SHIPPED він ще в резерві — знімаємо резерв
+                const wasDelivered = existingOrder.status === OrderStatus.DELIVERED;
                 for (const item of existingOrder.items) {
                     if (!item.productVariantId) {
                         continue;
@@ -585,11 +592,9 @@ export class OrderService {
                         where: {
                             id: item.productVariantId,
                         },
-                        data: {
-                            stockQty: {
-                                increment: item.quantity,
-                            },
-                        },
+                        data: wasDelivered
+                            ? { stockQty: { increment: item.quantity } }
+                            : { reservedQty: { decrement: item.quantity } },
                     });
                 }
             }

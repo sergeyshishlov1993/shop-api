@@ -87,11 +87,22 @@ describe('OrderService', () => {
     });
 
     it('replays existing order for reused idempotency key', async () => {
-      const existing = { id: 7 };
+      const existing = { id: 7, userId: 1 };
       prisma.order.findUnique.mockResolvedValue(existing);
       await expect(service.createOrder(owner, dto, 'k')).resolves.toEqual({ order: existing, isIdempotentReplay: true });
       expect(prisma.cart.findFirst).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects reused idempotency key of another user', async () => {
+      prisma.order.findUnique.mockResolvedValue({ id: 7, userId: 2 });
+      await expect(service.createOrder(owner, dto, 'k')).rejects.toThrow('Idempotency key already used');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects reused idempotency key of a user order for a guest', async () => {
+      prisma.order.findUnique.mockResolvedValue({ id: 7, userId: 1 });
+      await expect(service.createOrder({ userId: null, sessionId: 's1' }, dto, 'k')).rejects.toThrow('Idempotency key already used');
     });
 
     it('rejects empty cart', async () => {
@@ -269,6 +280,13 @@ describe('OrderService', () => {
       arrange(OrderStatus.DELIVERED, OrderStatus.RETURNED);
       await service.updateOrderStatus(1, { newStatus: OrderStatus.RETURNED });
       expect(tx.productVariant.update).toHaveBeenCalledWith({ where: { id: 5 }, data: { stockQty: { increment: 2 } } });
+    });
+
+    it('shipped -> returned releases reservation instead of restocking', async () => {
+      arrange(OrderStatus.SHIPPED, OrderStatus.RETURNED);
+      await service.updateOrderStatus(1, { newStatus: OrderStatus.RETURNED });
+      expect(tx.productVariant.update).toHaveBeenCalledWith({ where: { id: 5 }, data: { reservedQty: { decrement: 2 } } });
+      expect(tx.productVariant.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { stockQty: { increment: 2 } } }));
     });
   });
 });

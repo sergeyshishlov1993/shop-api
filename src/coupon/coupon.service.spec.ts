@@ -78,12 +78,17 @@ describe('CouponService.validate', () => {
 });
 
 describe('CouponService.redeem', () => {
-  it('increments usedCount on the transaction client', async () => {
-    const update = jest.fn().mockResolvedValue({});
-    await new CouponService({} as any).redeem({ coupon: { update } } as any, ' sale10');
-    expect(update).toHaveBeenCalledWith({
-      where: { code: 'SALE10' },
-      data: { usedCount: { increment: 1 } },
-    });
+  const tx = (affected: number) => ({ $executeRaw: jest.fn().mockResolvedValue(affected) });
+
+  it('atomically increments usedCount guarded by maxUses', async () => {
+    const client = tx(1);
+    await new CouponService({} as any).redeem(client as any, ' sale10');
+    const [sql, ...values] = client.$executeRaw.mock.calls[0];
+    expect(sql.join('?')).toMatch(/"usedCount" = "usedCount" \+ 1[\s\S]*"maxUses" IS NULL OR "usedCount" < "maxUses"/);
+    expect(values).toEqual(['SALE10']);
+  });
+
+  it('throws when limit already reached (concurrent order took the last use)', async () => {
+    await expect(new CouponService({} as any).redeem(tx(0) as any, 'SALE10')).rejects.toThrow('Ліміт використань');
   });
 });

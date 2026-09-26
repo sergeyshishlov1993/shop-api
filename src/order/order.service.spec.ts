@@ -289,4 +289,41 @@ describe('OrderService', () => {
       expect(tx.productVariant.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { stockQty: { increment: 2 } } }));
     });
   });
+  describe('getAdminOrders', () => {
+    it('search OR includes customerEmail contains/insensitive', async () => {
+      prisma.order.findMany = jest.fn().mockResolvedValue([]);
+      prisma.order.count = jest.fn().mockResolvedValue(0);
+      await service.getAdminOrders({ search: 'foo@x' } as any).catch(() => undefined);
+      expect(prisma.order.findMany.mock.calls[0][0].where.OR).toContainEqual({
+        customerEmail: { contains: 'foo@x', mode: 'insensitive' },
+      });
+    });
+  });
+
+  describe('syncNovaPoshtaStatuses', () => {
+    it('logs a failing order and keeps processing the rest; counts only successes', async () => {
+      const delivery = {
+        getMultipleTrackingInfo: jest.fn().mockResolvedValue([
+          { ttn: 'T1', statusCode: '9' },
+          { ttn: 'T2', statusCode: '9' },
+        ]),
+        mapNovaPoshtaStatusToOrderStatus: jest.fn().mockReturnValue(OrderStatus.DELIVERED),
+      };
+      prisma.order.findMany = jest.fn().mockResolvedValue([
+        { id: 1, trackingNumber: 'T1', status: OrderStatus.SHIPPED },
+        { id: 2, trackingNumber: 'T2', status: OrderStatus.SHIPPED },
+      ]);
+      const config = { get: jest.fn().mockReturnValue('https://shop.test/') };
+      const svc = new OrderService(prisma, telegram, config as any, cache, delivery as any, email, coupon);
+      const update = jest.spyOn(svc, 'updateOrderStatus')
+        .mockRejectedValueOnce(new Error('db fail'))
+        .mockResolvedValueOnce({} as any);
+      const logSpy = jest.spyOn((svc as any).logger, 'error').mockImplementation(() => undefined);
+
+      expect(await svc.syncNovaPoshtaStatuses()).toEqual({ checked: 2, updated: 1 });
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(update.mock.calls[1][0]).toBe(2);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('order 1'));
+    });
+  });
 });

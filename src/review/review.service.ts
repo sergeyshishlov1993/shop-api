@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Logger,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -81,6 +82,8 @@ type ReviewNode = Review & {
 
 @Injectable()
 export class ReviewService {
+  private readonly logger = new Logger(ReviewService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
@@ -313,7 +316,7 @@ export class ReviewService {
     dto: UpdateReviewDto,
     files: Express.Multer.File[] = [],
   ): Promise<CreateReviewResponse> {
-    const review = await this.findOwn(id, userId, { media: { select: { id: true } } });
+    const review = await this.findOwn(id, userId, { media: { select: { id: true, fileId: true } } });
 
     if (dto.rating !== undefined && review.depth !== 0) {
       throw new BadRequestException('Only top-level reviews have a rating');
@@ -340,6 +343,8 @@ export class ReviewService {
       include: nodeInclude(userId),
     });
 
+    await this.deleteFiles(review.media.filter((m) => removeIds.includes(m.id)).map((m) => m.fileId));
+
     return {
       ...(await this.mapNode(updated as ReviewNode)),
       message: 'Review updated',
@@ -360,8 +365,22 @@ export class ReviewService {
     });
     const ids = [id, ...children.map((c) => c.id), ...grandChildren.map((c) => c.id)];
 
+    const media = await this.prisma.reviewMedia.findMany({
+      where: { reviewId: { in: ids } },
+      select: { fileId: true },
+    });
+
     await this.prisma.review.deleteMany({ where: { id: { in: ids } } });
+    await this.deleteFiles(media.map((m) => m.fileId));
     return { success: true };
+  }
+
+  // Файли видаляємо після рядків ReviewMedia (FK); збій S3 не повинен ламати відповідь користувачу
+  private async deleteFiles(fileIds: number[]): Promise<void> {
+    for (const fileId of fileIds) {
+      await this.fileService.delete(fileId).catch((error: Error) =>
+        this.logger.warn(`Failed to delete review file ${fileId}: ${error.message}`));
+    }
   }
 
   async toggleLike(reviewId: number, userId: number): Promise<ReviewLikeResponse> {

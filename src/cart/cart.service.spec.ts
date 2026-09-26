@@ -23,6 +23,7 @@ describe('CartService', () => {
       cart: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
       cartItem: { findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
       productVariant: { findFirst: jest.fn() },
+      $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     service = new CartService(prisma);
     // getCart is covered separately; isolate mutations
@@ -178,6 +179,28 @@ describe('CartService', () => {
         data: { cartId: 4, productVariantId: 6, quantity: 2, unitPriceSnapshot: 50 },
       });
       expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 3 } });
+    });
+
+    it('runs merge + guest cart delete inside $transaction via tx; propagates tx errors', async () => {
+      const tx = {
+        productVariant: { findFirst: jest.fn().mockResolvedValue(variant({ id: 6 })) },
+        cartItem: { create: jest.fn().mockRejectedValue(new Error('boom')), update: jest.fn() },
+        cart: { delete: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      prisma.cart.findUnique
+        .mockResolvedValueOnce({ id: 3, items: [{ productVariantId: 6, quantity: 1 }] })
+        .mockResolvedValueOnce({ id: 4, items: [] });
+
+      await expect(service.mergeGuestCartToUser({ userId: 1, sessionId: 's1' })).rejects.toThrow('boom');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(tx.productVariant.findFirst).toHaveBeenCalled();
+      expect(tx.cartItem.create).toHaveBeenCalled();
+      expect(prisma.productVariant.findFirst).not.toHaveBeenCalled();
+      expect(prisma.cartItem.create).not.toHaveBeenCalled();
+      expect(tx.cart.delete).not.toHaveBeenCalled();
+      expect(prisma.cart.delete).not.toHaveBeenCalled();
     });
   });
 });

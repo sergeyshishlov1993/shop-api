@@ -69,62 +69,65 @@ export class CartService {
       return;
     }
 
-    for (const guestItem of guestCart.items) {
-      const existingUserItem = userCart.items.find(
-        (item) => item.productVariantId === guestItem.productVariantId,
-      );
+    // Усе злиття в одній транзакції — збій посередині не залишить кошик наполовину об'єднаним
+    await this.prisma.$transaction(async (tx) => {
+      for (const guestItem of guestCart.items) {
+        const existingUserItem = userCart.items.find(
+          (item) => item.productVariantId === guestItem.productVariantId,
+        );
 
-      const variant = await this.prisma.productVariant.findFirst({
-        where: {
-          id: guestItem.productVariantId,
-          isActive: true,
-          deletedAt: null,
-          product: {
+        const variant = await tx.productVariant.findFirst({
+          where: {
+            id: guestItem.productVariantId,
             isActive: true,
             deletedAt: null,
+            product: {
+              isActive: true,
+              deletedAt: null,
+            },
           },
-        },
-        include: {
-          product: true,
-        },
+          include: {
+            product: true,
+          },
+        });
+
+        if (!variant) {
+          continue;
+        }
+
+        const currentPrice = variant.price ?? variant.product.basePrice;
+        const availableQty = Math.max(variant.stockQty - variant.reservedQty, 0);
+
+        if (availableQty <= 0) {
+          continue;
+        }
+
+        if (existingUserItem) {
+          await tx.cartItem.update({
+            where: { id: existingUserItem.id },
+            data: {
+              quantity: Math.min(
+                Math.max(existingUserItem.quantity, guestItem.quantity),
+                availableQty,
+              ),
+              unitPriceSnapshot: currentPrice,
+            },
+          });
+        } else {
+          await tx.cartItem.create({
+            data: {
+              cartId: userCart.id,
+              productVariantId: guestItem.productVariantId,
+              quantity: Math.min(guestItem.quantity, availableQty),
+              unitPriceSnapshot: currentPrice,
+            },
+          });
+        }
+      }
+
+      await tx.cart.delete({
+        where: { id: guestCart.id },
       });
-
-      if (!variant) {
-        continue;
-      }
-
-      const currentPrice = variant.price ?? variant.product.basePrice;
-      const availableQty = Math.max(variant.stockQty - variant.reservedQty, 0);
-
-      if (availableQty <= 0) {
-        continue;
-      }
-
-      if (existingUserItem) {
-        await this.prisma.cartItem.update({
-          where: { id: existingUserItem.id },
-          data: {
-            quantity: Math.min(
-              Math.max(existingUserItem.quantity, guestItem.quantity),
-              availableQty,
-            ),
-            unitPriceSnapshot: currentPrice,
-          },
-        });
-      } else {
-        await this.prisma.cartItem.create({
-          data: {
-            cartId: userCart.id,
-            productVariantId: guestItem.productVariantId,
-            quantity: Math.min(guestItem.quantity, availableQty),
-            unitPriceSnapshot: currentPrice,
-          },
-        });
-      }
-    }
-
-    await this.prisma.cart.delete({
-      where: { id: guestCart.id },
     });
   }
 

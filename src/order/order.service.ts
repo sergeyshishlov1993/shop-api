@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     ConflictException,
+    Logger,
     Injectable,
     NotFoundException,
     UnauthorizedException,
@@ -58,6 +59,8 @@ type LowStockNotificationItem = {
 
 @Injectable()
 export class OrderService {
+    private readonly logger = new Logger(OrderService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly telegramService: TelegramService,
@@ -367,6 +370,12 @@ export class OrderService {
                 },
                 {
                     customerPhone: {
+                        contains: query.search,
+                        mode: 'insensitive',
+                    },
+                },
+                {
+                    customerEmail: {
                         contains: query.search,
                         mode: 'insensitive',
                     },
@@ -771,7 +780,12 @@ export class OrderService {
             if (!order.trackingNumber) continue;
             const tracking = trackingByNumber.get(order.trackingNumber);
             if (!tracking) continue;
-            if (await this.applyNovaPoshtaStatus(order, tracking.statusCode)) updated += 1;
+            // Помилка одного замовлення не зупиняє синхронізацію решти
+            try {
+                if (await this.applyNovaPoshtaStatus(order, tracking.statusCode)) updated += 1;
+            } catch (error) {
+                this.logger.error(`Nova Poshta sync failed for order ${order.id}: ${(error as Error).message}`);
+            }
         }
 
         return { checked: orders.length, updated };

@@ -16,6 +16,9 @@ import { RegisterDto } from './dto/register.dto';
 import { GoogleProfile } from './types/google-profile.type';
 import { Tokens } from './types/tokens.type';
 
+// Скільки старий refresh-токен лишається дійсним після ротації
+const REFRESH_GRACE_PERIOD_MS = 30_000;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -199,7 +202,13 @@ export class AuthService {
       include: { user: true },
     });
 
-    if (!matchedSession || matchedSession.revokedAt || matchedSession.expiresAt < new Date()) {
+    const now = new Date();
+    // Льготний період: токен, щойно замінений ротацією (друга вкладка / скасований запит), ще приймаємо.
+    // Відкликаний logout-ом чи зміною пароля (rotatedAt = null) — ні.
+    const inGracePeriod = matchedSession?.rotatedAt
+      && now.getTime() - matchedSession.rotatedAt.getTime() < REFRESH_GRACE_PERIOD_MS;
+
+    if (!matchedSession || (matchedSession.revokedAt && !inGracePeriod) || matchedSession.expiresAt < now) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -207,10 +216,12 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    await this.prisma.refreshSession.update({
-      where: { id: matchedSession.id },
-      data: { revokedAt: new Date() },
-    });
+    if (!matchedSession.revokedAt) {
+      await this.prisma.refreshSession.update({
+        where: { id: matchedSession.id },
+        data: { revokedAt: now, rotatedAt: now },
+      });
+    }
 
     return this.generateTokensAndCreateSession(
       matchedSession.user.id,

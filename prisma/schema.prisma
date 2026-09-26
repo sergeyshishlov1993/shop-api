@@ -159,6 +159,8 @@ model RefreshSession {
   ip        String?
   expiresAt DateTime
   revokedAt DateTime?
+  // Коли токен замінено ротацією (для льготного періоду); null — відкликано logout-ом/зміною пароля
+  rotatedAt DateTime?
   createdAt DateTime  @default(now())
 }
 

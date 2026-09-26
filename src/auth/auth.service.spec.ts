@@ -157,9 +157,39 @@ describe('AuthService', () => {
     it('rotates: revokes matched session and creates a new one', async () => {
       prisma.refreshSession.findUnique.mockResolvedValue(session());
       const tokens = await service.refresh('tok');
-      expect(prisma.refreshSession.update).toHaveBeenCalledWith({ where: { id: 10 }, data: { revokedAt: expect.any(Date) } });
+      expect(prisma.refreshSession.update).toHaveBeenCalledWith({
+        where: { id: 10 },
+        data: { revokedAt: expect.any(Date), rotatedAt: expect.any(Date) },
+      });
       expect(prisma.refreshSession.create).toHaveBeenCalledTimes(1);
       expect(tokens.refreshToken).not.toBe('tok');
+    });
+
+    it('grace period: accepts token rotated moments ago (second tab) without re-revoking', async () => {
+      const at = new Date(Date.now() - 5_000);
+      prisma.refreshSession.findUnique.mockResolvedValue(session({ revokedAt: at, rotatedAt: at }));
+      const tokens = await service.refresh('tok');
+      expect(tokens.accessToken).toBeDefined();
+      expect(prisma.refreshSession.update).not.toHaveBeenCalled();
+      expect(prisma.refreshSession.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('grace period over: rejects token rotated more than 30s ago', async () => {
+      const at = new Date(Date.now() - 31_000);
+      prisma.refreshSession.findUnique.mockResolvedValue(session({ revokedAt: at, rotatedAt: at }));
+      await expect(service.refresh('tok')).rejects.toThrow('Invalid refresh token');
+      expect(prisma.refreshSession.create).not.toHaveBeenCalled();
+    });
+
+    it('no grace for logout/password-change revocation (rotatedAt null)', async () => {
+      prisma.refreshSession.findUnique.mockResolvedValue(session({ revokedAt: new Date(), rotatedAt: null }));
+      await expect(service.refresh('tok')).rejects.toThrow('Invalid refresh token');
+    });
+
+    it('grace period does not bypass expiry', async () => {
+      const at = new Date();
+      prisma.refreshSession.findUnique.mockResolvedValue(session({ revokedAt: at, rotatedAt: at, expiresAt: new Date(Date.now() - 1) }));
+      await expect(service.refresh('tok')).rejects.toThrow('Invalid refresh token');
     });
   });
 

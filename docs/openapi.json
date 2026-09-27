@@ -1908,6 +1908,31 @@
         ]
       }
     },
+    "/storefront/stock-notifications": {
+      "post": {
+        "operationId": "StockNotificationController_subscribe",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeStockDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "summary": "Підписатися на сповіщення про надходження товару",
+        "tags": [
+          "Storefront — Підписка на наявність"
+        ]
+      }
+    },
     "/admin/products/{productId}/media": {
       "get": {
         "description": "**Доступ:** ADMIN\n\n**Зачем:** просмотр всех изображений и видео привязанных к товару.\n\n**Ответ:** массив медиа с данными FileAsset (URL всех размеров), sortOrder, isMain, привязка к варианту (если есть).",
@@ -1996,6 +2021,54 @@
           }
         ],
         "summary": "Привязать медиа к товару",
+        "tags": [
+          "Admin — Медиа товаров"
+        ]
+      }
+    },
+    "/admin/products/{productId}/media/instagram": {
+      "post": {
+        "description": "**Доступ:** ADMIN\n\n**Бизнес-логика:** создаёт ProductMedia (VIDEO) без файла, с `externalUrl` — ссылкой на Instagram post/reel (instagram.com/(p|reel|reels|tv)/<code>).",
+        "operationId": "MediaController_createInstagram",
+        "parameters": [
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор товара",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstagramMediaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Instagram-медиа привязано к товару."
+          },
+          "400": {
+            "description": "Некорректная ссылка."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Привязать Instagram-видео к товару",
         "tags": [
           "Admin — Медиа товаров"
         ]
@@ -2558,7 +2631,7 @@
             "name": "x-idempotency-key",
             "in": "header",
             "description": "UUID для защиты от повторного создания заказа при ретрае",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2847,6 +2920,42 @@
         ]
       }
     },
+    "/admin/orders/{id}/ttn": {
+      "post": {
+        "description": "Требует заполненных реквизитов отправителя NP в настройках. Сохраняет trackingNumber.",
+        "operationId": "AdminOrderController_createTtn",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "ТТН создана, trackingNumber сохранён."
+          },
+          "400": {
+            "description": "Не настроен отправитель NP или нет данных доставки."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать ТТН Nova Poshta для заказа",
+        "tags": [
+          "Admin — Заказы"
+        ]
+      }
+    },
     "/delivery/cities": {
       "get": {
         "operationId": "DeliveryController_searchCities",
@@ -2877,9 +2986,256 @@
         ]
       }
     },
+    "/storefront/coupons/validate": {
+      "post": {
+        "operationId": "CouponController_validate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateCouponDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Проверить промокод под сумму корзины",
+        "tags": [
+          "Storefront — Промокоды"
+        ]
+      }
+    },
+    "/admin/coupons": {
+      "get": {
+        "operationId": "AdminCouponController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список промокодов",
+        "tags": [
+          "Admin — Промокоды"
+        ]
+      },
+      "post": {
+        "operationId": "AdminCouponController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCouponDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Создать промокод",
+        "tags": [
+          "Admin — Промокоды"
+        ]
+      }
+    },
+    "/admin/coupons/{id}": {
+      "patch": {
+        "operationId": "AdminCouponController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCouponDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Обновить промокод",
+        "tags": [
+          "Admin — Промокоды"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminCouponController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить промокод",
+        "tags": [
+          "Admin — Промокоды"
+        ]
+      }
+    },
+    "/storefront/payments": {
+      "post": {
+        "description": "За фиче-флагом. Пока онлайн-оплата выключена (env `PAYMENTS_ENABLED` + `StoreSettings.onlinePaymentEnabled`), возвращает 403.",
+        "operationId": "PaymentController_createPayment",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Платёж создан, возвращён redirectUrl."
+          },
+          "403": {
+            "description": "Онлайн-оплата временно недоступна (флаг выключен)."
+          }
+        },
+        "summary": "Создать онлайн-платёж по заказу",
+        "tags": [
+          "Storefront — Оплата"
+        ]
+      }
+    },
+    "/payments/callback": {
+      "post": {
+        "description": "За фиче-флагом. Проверяет подпись и идемпотентно обновляет статус оплаты заказа.",
+        "operationId": "PaymentController_callback",
+        "parameters": [
+          {
+            "name": "x-signature",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Вебхук принят."
+          }
+        },
+        "summary": "Вебхук провайдера оплаты",
+        "tags": [
+          "Storefront — Оплата"
+        ]
+      }
+    },
+    "/feeds/google.xml": {
+      "get": {
+        "operationId": "FeedController_google",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Google Merchant feed (XML)",
+        "tags": [
+          "Feeds — товарные фиды"
+        ]
+      }
+    },
+    "/feeds/facebook.csv": {
+      "get": {
+        "operationId": "FeedController_facebook",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Meta (Facebook/Instagram) catalog (CSV)",
+        "tags": [
+          "Feeds — товарные фиды"
+        ]
+      }
+    },
     "/storefront/products/{productId}/reviews": {
       "get": {
-        "description": "**Доступ:** публичный\n\n**Зачем:** блок отзывов на карточке товара.\n\n**Бизнес-логика:**\n- Возвращаются только **одобренные** отзывы (`status: APPROVED`)\n- Пагинация по корневым отзывам (offset + limit)\n- Ответы админа (depth=1) вложены в корневой отзыв как массив `replies[]`\n- Каждый отзыв содержит: rating, text, createdAt, user (firstName, lastName, avatarUrl)\n\n**Структура:** плоский список корневых отзывов, у каждого поле `replies[]` с ответами.",
+        "description": "**Доступ:** публичный\n\n**Зачем:** блок отзывов на карточке товара.\n\n**Бизнес-логика:**\n- Возвращаются только **одобренные** отзывы (`status: APPROVED`)\n- Пагинация по корневым отзывам (offset + limit)\n- Сортировка `sort`: newest (по умолчанию) | oldest | popular | rating_desc | rating_asc — только для корневых\n- Ответы (depth 1–2) вложены деревом `replies[]`, всегда от старых к новым\n- `likesCount`, `likedByMe` (если передан JWT — опционально)\n- Каждый отзыв содержит: rating, text, createdAt, user (firstName, lastName, avatarUrl)\n\n**Структура:** плоский список корневых отзывов, у каждого поле `replies[]` с ответами.",
         "operationId": "ReviewController_getProductReviews",
         "parameters": [
           {
@@ -2929,6 +3285,11 @@
         "requestBody": {
           "required": true,
           "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReviewDto"
+              }
+            },
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CreateReviewDto"
@@ -2956,6 +3317,164 @@
           }
         ],
         "summary": "Оставить отзыв",
+        "tags": [
+          "Storefront — Отзывы"
+        ]
+      }
+    },
+    "/storefront/reviews/{id}/like": {
+      "post": {
+        "operationId": "ReviewActionsController_toggleLike",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Лайк / снять лайк (toggle) одобренного отзыва или ответа",
+        "tags": [
+          "Storefront — Отзывы"
+        ]
+      }
+    },
+    "/storefront/reviews/{id}/replies": {
+      "post": {
+        "description": "Ответ на одобренный отзыв/ответ. Макс. глубина 2: ответ на depth=2 прикрепляется к его родителю. Статус PENDING.",
+        "operationId": "ReviewActionsController_createReply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReplyDto"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ответить на отзыв",
+        "tags": [
+          "Storefront — Отзывы"
+        ]
+      }
+    },
+    "/storefront/reviews/{id}": {
+      "patch": {
+        "description": "text, rating (только корневой), removeMediaIds[], новые файлы media (итого ≤5). Ставит editedAt и возвращает в PENDING.",
+        "operationId": "ReviewActionsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReviewDto"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Редактировать свой отзыв/ответ",
+        "tags": [
+          "Storefront — Отзывы"
+        ]
+      },
+      "delete": {
+        "operationId": "ReviewActionsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Удалить свой отзыв/ответ (вместе с ответами на него)",
         "tags": [
           "Storefront — Отзывы"
         ]
@@ -3093,6 +3612,423 @@
         "summary": "Ответить на отзыв",
         "tags": [
           "Admin — Отзывы"
+        ]
+      }
+    },
+    "/storefront/account/returns": {
+      "get": {
+        "description": "**Доступ:** авторизований користувач (JWT)\n\n**Відповідь:** масив ReturnSummary (найновіші першими).",
+        "operationId": "ReturnsController_findMine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Список заявок на повернення."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Мої повернення",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      },
+      "post": {
+        "description": "**Бізнес-логіка:** перевіряється право на повернення та кількість по кожній позиції. Номер формату RET-YYYYMMDD-NNNN. Клієнту надсилається лист.",
+        "operationId": "ReturnsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReturnDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Заявку створено."
+          },
+          "400": {
+            "description": "Повернення неможливе або помилка валідації."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Створити заявку на повернення",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/storefront/account/returns/photos": {
+      "post": {
+        "operationId": "ReturnsController_uploadPhoto",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Фото завантажено: { id, url }."
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Завантажити фото для заявки на повернення (JPEG/PNG/WebP, ≤10 МБ)",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/storefront/account/returns/{id}": {
+      "get": {
+        "operationId": "ReturnsController_findMineById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Заявку не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Деталі моєї заявки на повернення",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/storefront/account/orders/{orderId}/return-eligibility": {
+      "get": {
+        "description": "**Бізнес-логіка:** лише власне замовлення у статусі DELIVERED, протягом `returnWindowDays` днів після доставки. Для кожної позиції повертається `returnableQty` (куплено мінус вже заявлено в активних поверненнях).",
+        "operationId": "ReturnsController_getEligibility",
+        "parameters": [
+          {
+            "name": "orderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Чи можна повернути товари із замовлення",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/storefront/account/returns/{id}/cancel": {
+      "post": {
+        "operationId": "ReturnsController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Скасувати заявку (лише у статусі NEW)",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/storefront/account/returns/{id}/tracking": {
+      "patch": {
+        "operationId": "ReturnsController_updateTracking",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReturnTrackingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Вказати ТТН зворотної посилки (лише у статусі APPROVED)",
+        "tags": [
+          "Storefront — Повернення"
+        ]
+      }
+    },
+    "/admin/returns": {
+      "get": {
+        "description": "**Доступ:** ADMIN\n\n**Фільтри:** `status`, `search` (номер повернення, номер замовлення, телефон, імʼя).\n**Пагінація:** `page`, `limit`.\n\n**Відповідь:** { items, totalCount, page, limit }.",
+        "operationId": "AdminReturnsController_findAll",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NEW",
+                "UNDER_REVIEW",
+                "APPROVED",
+                "RECEIVED",
+                "REFUNDED",
+                "REJECTED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Пошук: номер повернення, номер замовлення, телефон, імʼя",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Object"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Object"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список заявок на повернення",
+        "tags": [
+          "Admin — Повернення"
+        ]
+      }
+    },
+    "/admin/returns/stats": {
+      "get": {
+        "operationId": "AdminReturnsController_getStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Лічильники нових заявок та заявок на розгляді",
+        "tags": [
+          "Admin — Повернення"
+        ]
+      }
+    },
+    "/admin/returns/{id}": {
+      "get": {
+        "operationId": "AdminReturnsController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Заявку не знайдено."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Деталі заявки на повернення (реквізити без маскування)",
+        "tags": [
+          "Admin — Повернення"
+        ]
+      }
+    },
+    "/admin/returns/{id}/status": {
+      "patch": {
+        "description": "**Переходи:** NEW→UNDER_REVIEW|REJECTED, UNDER_REVIEW→APPROVED|REJECTED, APPROVED→RECEIVED|REJECTED, RECEIVED→REFUNDED|REJECTED.\n\n- REJECTED потребує `rejectReason`\n- REFUNDED потребує `refundAmount > 0`: створюється витрата типу RETURN; якщо всі позиції замовлення повернено — замовлення переходить у RETURNED.\n\nКожна зміна пишеться в історію, клієнту надсилається лист.",
+        "operationId": "AdminReturnsController_updateStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReturnStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "Недопустимий перехід або помилка валідації."
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Змінити статус заявки",
+        "tags": [
+          "Admin — Повернення"
         ]
       }
     },
@@ -3812,6 +4748,16 @@
               "example": "20",
               "type": "string"
             }
+          },
+          {
+            "name": "deletedOnly",
+            "required": false,
+            "in": "query",
+            "description": "Показати лише приховані звернення",
+            "schema": {
+              "example": "true",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4310,6 +5256,408 @@
         ]
       }
     },
+    "/admin/import/preview": {
+      "post": {
+        "operationId": "ImportController_preview",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Превью CSV/XLSX: заголовки + первые строки",
+        "tags": [
+          "Admin — Импорт"
+        ]
+      }
+    },
+    "/admin/import/stock": {
+      "post": {
+        "operationId": "ImportController_runStock",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Импорт остатков/цен по SKU из CSV/XLSX",
+        "tags": [
+          "Admin — Импорт"
+        ]
+      }
+    },
+    "/admin/import/yml": {
+      "post": {
+        "operationId": "ImportController_runYml",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Импорт товаров из YML (Rozetka/Prom): создание и обновление по SKU",
+        "tags": [
+          "Admin — Импорт"
+        ]
+      }
+    },
+    "/storefront/instagram": {
+      "get": {
+        "operationId": "InstagramController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Активні пости Instagram-блоку",
+        "tags": [
+          "Storefront — Instagram"
+        ]
+      }
+    },
+    "/admin/instagram": {
+      "get": {
+        "operationId": "AdminInstagramController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Список постів (адмін)",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      },
+      "post": {
+        "operationId": "AdminInstagramController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstagramPostDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Додати пост",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      }
+    },
+    "/admin/instagram/refresh-stats": {
+      "post": {
+        "operationId": "AdminInstagramController_refreshStats",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити лайки й коментарі всіх постів з Instagram",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      }
+    },
+    "/admin/instagram/from-link": {
+      "post": {
+        "operationId": "AdminInstagramController_createFromLink",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstagramPostFromLinkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Додати пост за посиланням (фото підтягується автоматично)",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      }
+    },
+    "/admin/instagram/{id}": {
+      "patch": {
+        "operationId": "AdminInstagramController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInstagramPostDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Оновити пост",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminInstagramController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Видалити пост",
+        "tags": [
+          "Admin — Instagram"
+        ]
+      }
+    },
+    "/admin/labels/print": {
+      "post": {
+        "operationId": "LabelController_print",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintLabelsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HTML-лист ценников со штрихкодами (для печати)",
+        "tags": [
+          "Admin — Цінники"
+        ]
+      }
+    },
+    "/storefront/newsletter/subscribe": {
+      "post": {
+        "operationId": "NewsletterController_subscribe",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeNewsletterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Підписка на розсилку (double opt-in)",
+        "tags": [
+          "Storefront — Розсилка"
+        ]
+      }
+    },
+    "/storefront/newsletter/confirm": {
+      "get": {
+        "operationId": "NewsletterController_confirm",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Підтвердження підписки за токеном",
+        "tags": [
+          "Storefront — Розсилка"
+        ]
+      }
+    },
+    "/storefront/newsletter/unsubscribe": {
+      "get": {
+        "operationId": "NewsletterController_unsubscribe",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Відписка за токеном",
+        "tags": [
+          "Storefront — Розсилка"
+        ]
+      }
+    },
     "/admin/notification-settings": {
       "get": {
         "description": "**Доступ:** ADMIN\n\n**Зачем:** перегляд поточних налаштувань Telegram-сповіщень.\n\n**Ответ:**\n- `telegramBotToken` — токен бота (замаскований: перші 5 символів + ***)\n- `telegramChatId` — ID чату для сповіщень\n- `notifyOnNewOrder` — сповіщати про нові замовлення\n- `notifyOnNewReview` — сповіщати про нові відгуки\n- `notifyOnNewFeedback` — сповіщати про нові звернення\n- `notifyOnLowStock` — сповіщати про низькі залишки",
@@ -4595,7 +5943,15 @@
         "type": "object",
         "properties": {}
       },
+      "SubscribeStockDto": {
+        "type": "object",
+        "properties": {}
+      },
       "CreateMediaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateInstagramMediaDto": {
         "type": "object",
         "properties": {}
       },
@@ -4662,7 +6018,31 @@
         "type": "object",
         "properties": {}
       },
+      "ValidateCouponDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateCouponDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateCouponDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreatePaymentDto": {
+        "type": "object",
+        "properties": {}
+      },
       "CreateReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateReplyDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateReviewDto": {
         "type": "object",
         "properties": {}
       },
@@ -4673,6 +6053,122 @@
       "AdminReplyReviewDto": {
         "type": "object",
         "properties": {}
+      },
+      "CreateReturnItemDto": {
+        "type": "object",
+        "properties": {
+          "orderItemId": {
+            "type": "number",
+            "description": "ID позиції замовлення"
+          },
+          "quantity": {
+            "type": "number",
+            "description": "Кількість до повернення",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "orderItemId",
+          "quantity"
+        ]
+      },
+      "CreateReturnDto": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "number",
+            "description": "ID замовлення"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateReturnItemDto"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "WRONG_SIZE",
+              "DEFECT",
+              "NOT_AS_DESCRIBED",
+              "CHANGED_MIND",
+              "OTHER"
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Коментар клієнта"
+          },
+          "refundDetails": {
+            "type": "string",
+            "description": "Реквізити для повернення коштів (IBAN або картка)"
+          },
+          "photoFileIds": {
+            "description": "ID фото (до 3)",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "orderId",
+          "items",
+          "reason",
+          "refundDetails"
+        ]
+      },
+      "UpdateReturnTrackingDto": {
+        "type": "object",
+        "properties": {
+          "trackingNumber": {
+            "type": "string",
+            "description": "Номер ТТН зворотної посилки"
+          }
+        },
+        "required": [
+          "trackingNumber"
+        ]
+      },
+      "Object": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateReturnStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "NEW",
+              "UNDER_REVIEW",
+              "APPROVED",
+              "RECEIVED",
+              "REFUNDED",
+              "REJECTED",
+              "CANCELLED"
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Коментар до зміни статусу (бачить клієнт в історії)"
+          },
+          "refundAmount": {
+            "type": "number",
+            "description": "Сума повернення (обовʼязково для REFUNDED)"
+          },
+          "rejectReason": {
+            "type": "string",
+            "description": "Причина відмови (обовʼязково для REJECTED)"
+          },
+          "managerComment": {
+            "type": "string",
+            "description": "Внутрішній коментар менеджера"
+          }
+        },
+        "required": [
+          "status"
+        ]
       },
       "CreateHeroSlideDto": {
         "type": "object",
@@ -4719,6 +6215,26 @@
         "properties": {}
       },
       "UpdateExpenseDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateInstagramPostDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateInstagramPostFromLinkDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateInstagramPostDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "PrintLabelsDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "SubscribeNewsletterDto": {
         "type": "object",
         "properties": {}
       },

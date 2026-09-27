@@ -36,6 +36,16 @@ const publicRoutes = new Set<string>([
   'GET /delivery/cities',
   'GET /delivery/warehouses',
   'GET /health',
+  'POST /storefront/stock-notifications',
+  'POST /storefront/coupons/validate',
+  'POST /storefront/payments',
+  'POST /payments/callback',
+  'GET /feeds/google.xml',
+  'GET /feeds/facebook.csv',
+  'GET /storefront/instagram',
+  'POST /storefront/newsletter/subscribe',
+  'GET /storefront/newsletter/confirm',
+  'GET /storefront/newsletter/unsubscribe',
 ]);
 
 function hasSecurity(method: OpenApiMethod | undefined): boolean {

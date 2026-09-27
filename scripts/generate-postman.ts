@@ -26,7 +26,7 @@ async function main(): Promise<void> {
     {
       folderStrategy: 'Tags',
       includeAuthInfoInExample: true,
-      requestNameSource: 'fallback',
+      requestNameSource: 'Fallback',
     },
   )) as ConversionResult;
 

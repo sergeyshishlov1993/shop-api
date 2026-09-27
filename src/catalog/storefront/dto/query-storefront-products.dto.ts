@@ -104,6 +104,13 @@ export class QueryStorefrontProductsDto {
     @IsOptional()
     isSeasonal?: boolean;
 
+    // ID промо-блоку (тип CUSTOM): лише товари цієї ручної добірки
+    @IsInt()
+    @Min(1)
+    @Type(() => Number)
+    @IsOptional()
+    promo?: number;
+
     @IsString()
     @IsOptional()
     @Transform(({ value }) => sanitizeString(value))

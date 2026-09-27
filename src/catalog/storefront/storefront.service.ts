@@ -258,6 +258,7 @@ export class StorefrontService {
         if (dto.isNew !== undefined) where.isNew = dto.isNew;
         if (dto.isHit !== undefined) where.isHit = dto.isHit;
         if (dto.isSeasonal !== undefined) where.isSeasonal = dto.isSeasonal;
+        if (dto.promo) where.promoProducts = { some: { promoBlockId: dto.promo } };
         if (dto.search) {
             where.OR = [
                 { name: { contains: dto.search, mode: 'insensitive' } },

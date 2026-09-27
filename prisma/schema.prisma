@@ -262,9 +262,24 @@ model Product {
   reviews            Review[]
   promoProducts      PromoBlockProduct[]
   stockNotifications StockNotification[]
+  wearWith           ProductWearWith[] @relation("WearWithSource")
+  wearWithOf         ProductWearWith[] @relation("WearWithTarget")
 
   @@index([slug])
   @@index([categoryId])
+}
+
+// «З чим носити» — ручний список товарів для карточки товару.
+model ProductWearWith {
+  productId        Int
+  product          Product  @relation("WearWithSource", fields: [productId], references: [id], onDelete: Cascade)
+  relatedProductId Int
+  relatedProduct   Product  @relation("WearWithTarget", fields: [relatedProductId], references: [id], onDelete: Cascade)
+  sortOrder        Int
+  createdAt        DateTime @default(now())
+
+  @@id([productId, relatedProductId])
+  @@index([productId])
 }
 
 model ProductVariant {

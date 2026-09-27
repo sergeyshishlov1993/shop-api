@@ -139,15 +139,51 @@ export class StorefrontService {
             select: { id: true, categoryId: true, productType: true, brand: true },
         });
         if (!product) throw new NotFoundException(`Product with slug "${slug}" not found`);
-        // Оба блока независимы и необязательны — параллелим, падение одного не роняет второй.
-        const [bought, similar] = await Promise.allSettled([
-            this.getBoughtTogether(product.id, 8),
-            this.getSimilar(product, 8),
+        const [manual, bought, similar] = await Promise.allSettled([
+            this.getManualWearWithIds(product.id),
+            this.getBoughtTogetherIds(product.id, 16),
+            this.getSimilarIds(product, 8),
         ]);
-        return {
-            boughtTogether: bought.status === 'fulfilled' ? bought.value : [],
-            similar: similar.status === 'fulfilled' ? similar.value : [],
-        };
+        const manualIds = manual.status === 'fulfilled' ? manual.value : [];
+        const boughtIds = bought.status === 'fulfilled' ? bought.value : [];
+        const similarIds = similar.status === 'fulfilled' ? similar.value : [];
+        return this.selectRelated(product, manualIds, boughtIds, similarIds);
+    }
+
+    /**
+     * wearWith: ручний список; якщо порожній — «купують разом» з інших категорій.
+     * similar: схожі + «купують разом» без wearWith, максимум 8.
+     */
+    private async selectRelated(
+        product: { id: number; categoryId: number },
+        manualIds: number[],
+        boughtIds: number[],
+        similarIds: number[],
+    ) {
+        let wearIds = manualIds;
+        if (wearIds.length === 0 && boughtIds.length > 0) {
+            const otherCat = await this.prisma.product.findMany({
+                where: { id: { in: boughtIds }, categoryId: { not: product.categoryId } },
+                select: { id: true },
+            });
+            const otherSet = new Set(otherCat.map((p) => p.id));
+            wearIds = boughtIds.filter((id) => otherSet.has(id)).slice(0, 8);
+        }
+        const wearWith = await this.getRelatedCards(wearIds);
+        const wearSet = new Set(wearWith.map((c) => c.id));
+        const mergedIds = [...new Set([...similarIds, ...boughtIds])].filter((id) => id !== product.id && !wearSet.has(id));
+        const similar = (await this.getRelatedCards(mergedIds)).slice(0, 8);
+        const boughtTogether = await this.getRelatedCards(boughtIds.slice(0, 8));
+        return { wearWith, similar, boughtTogether };
+    }
+
+    private async getManualWearWithIds(productId: number): Promise<number[]> {
+        const rows = await this.prisma.productWearWith.findMany({
+            where: { productId, relatedProduct: { isActive: true, deletedAt: null } },
+            orderBy: { sortOrder: 'asc' },
+            select: { relatedProductId: true },
+        });
+        return rows.map((r) => r.relatedProductId);
     }
 
     private async resolveCategoryIds(category?: string): Promise<number[] | undefined> {
@@ -514,7 +550,7 @@ export class StorefrontService {
         return crumbs;
     }
 
-    private async getBoughtTogether(productId: number, limit: number): Promise<ProductCard[]> {
+    private async getBoughtTogetherIds(productId: number, limit: number): Promise<number[]> {
         const rows = await this.prisma.$queryRawUnsafe<{ productId: number; frequency: number }[]>(`
       SELECT pv2."productId" AS "productId", COUNT(DISTINCT o."id")::int AS "frequency"
       FROM "OrderItem" oi1
@@ -527,11 +563,10 @@ export class StorefrontService {
         AND p2."isActive" = true AND p2."deletedAt" IS NULL AND o."status" != 'CANCELLED'
       GROUP BY pv2."productId" ORDER BY "frequency" DESC LIMIT $2
     `, productId, limit);
-        if (rows.length === 0) return [];
-        return this.getRelatedCards(rows.map((r) => r.productId));
+        return rows.map((r) => r.productId);
     }
 
-    private async getSimilar(product: { id: number; categoryId: number; productType: ProductType; brand: string | null }, limit: number): Promise<ProductCard[]> {
+    private async getSimilarIds(product: { id: number; categoryId: number; productType: ProductType; brand: string | null }, limit: number): Promise<number[]> {
         const orCond: Prisma.ProductWhereInput[] = [{ categoryId: product.categoryId }, { productType: product.productType }];
         if (product.brand) orCond.push({ brand: product.brand });
         const similar = await this.prisma.product.findMany({
@@ -541,11 +576,11 @@ export class StorefrontService {
             },
             select: { id: true }, take: limit, orderBy: { createdAt: 'desc' },
         });
-        if (similar.length === 0) return [];
-        return this.getRelatedCards(similar.map((p) => p.id));
+        return similar.map((p) => p.id);
     }
 
     private async getRelatedCards(productIds: number[]): Promise<ProductCard[]> {
+        if (productIds.length === 0) return [];
         const variantRows = await this.prisma.$queryRawUnsafe<AvailableVariantRow[]>(`
       SELECT v."productId" AS "productId", v."id" AS "variantId", v."sizeId" AS "sizeId",
         s."name" AS "sizeName", v."colorId" AS "colorId", c."name" AS "colorName", c."hexCode" AS "hexCode",

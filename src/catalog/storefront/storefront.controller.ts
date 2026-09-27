@@ -139,10 +139,11 @@ export class StorefrontController {
 **Зачем:** блоки рекомендаций на карточке товара для увеличения среднего чека.
 
 **Ответ:**
-- \`boughtTogether[]\` — товары, которые встречались в одних заказах с текущим. Сортировка по частоте совместных покупок, лимит 8
-- \`similar[]\` — товары из той же категории/productType/brand, исключая текущий, лимит 8. Используется всегда как дополнительный блок
+- \`boughtTogether[]\` — товары, которые встречались в одних заказах с текущим. Сортировка по частоте совместных покупок, лимит 8 (для совместимости)
+- \`wearWith[]\` — «З чим носити»: ручной список (admin/products/:id/wear-with) в заданном порядке; если пуст — «покупают вместе» из других категорий
+- \`similar[]\` — товары из той же категории/productType/brand + «покупают вместе», без wearWith, лимит 8
 
-Оба блока: только active + not deleted + с доступными вариантами. Формат как ProductCard (main media, effectivePrice, availabilityStatus).
+Все блоки: только active + not deleted + с доступными вариантами. Формат как ProductCard (main media, effectivePrice, availabilityStatus).
 
 **Кеш:** ключ \`related:{slug}\`, TTL 120 сек. Сбрасывается при изменении товаров и при доставке заказов (новые данные о совместных покупках).`,
   })
@@ -153,7 +154,7 @@ export class StorefrontController {
   })
   @ApiResponse({
     status: 200,
-    description: '{ boughtTogether: ProductCard[], similar: ProductCard[] }',
+    description: '{ wearWith: ProductCard[], similar: ProductCard[], boughtTogether: ProductCard[] }',
   })
   @ApiResponse({
     status: 404,

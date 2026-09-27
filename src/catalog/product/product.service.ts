@@ -7,7 +7,7 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Prisma, ProductType, FileType } from '@prisma/client';
 import { CacheService } from '../../cache/cache.service';
-import { CreateProductDto, UpdateProductDto, QueryProductDto } from './dto';
+import { CreateProductDto, UpdateProductDto, QueryProductDto, SetWearWithDto } from './dto';
 
 @Injectable()
 export class ProductService {
@@ -306,5 +306,68 @@ export class ProductService {
                 `FileAsset with id ${fileId} is not a video`,
             );
         }
+    }
+
+    async getWearWith(id: number) {
+        await this.ensureProduct(id);
+        const rows = await this.prisma.productWearWith.findMany({
+            where: { productId: id },
+            orderBy: { sortOrder: 'asc' },
+            select: {
+                relatedProduct: {
+                    select: {
+                        id: true, name: true, slug: true, basePrice: true, deletedAt: true,
+                        media: {
+                            where: { isMain: true },
+                            take: 1,
+                            select: { file: { select: { id: true, s3Key: true, s3KeyThumb: true } } },
+                        },
+                    },
+                },
+            },
+        });
+        return rows
+            .map((r) => r.relatedProduct)
+            .filter((p) => !p.deletedAt)
+            .map((p) => ({
+                id: p.id,
+                name: p.name,
+                slug: p.slug,
+                price: p.basePrice,
+                mainImage: p.media[0]?.file ?? null,
+            }));
+    }
+
+    async setWearWith(id: number, dto: SetWearWithDto) {
+        await this.ensureProduct(id);
+        const ids = dto.productIds;
+        if (ids.includes(id)) throw new BadRequestException('Product cannot be linked to itself');
+        if (new Set(ids).size !== ids.length) throw new BadRequestException('Duplicate product ids');
+        if (ids.length > 12) throw new BadRequestException('Maximum 12 products');
+        if (ids.length > 0) {
+            const found = await this.prisma.product.findMany({
+                where: { id: { in: ids }, deletedAt: null },
+                select: { id: true },
+            });
+            const foundIds = new Set(found.map((p) => p.id));
+            const missing = ids.filter((pid) => !foundIds.has(pid));
+            if (missing.length) throw new BadRequestException(`Products not found: ${missing.join(', ')}`);
+        }
+        await this.prisma.$transaction([
+            this.prisma.productWearWith.deleteMany({ where: { productId: id } }),
+            this.prisma.productWearWith.createMany({
+                data: ids.map((relatedProductId, sortOrder) => ({ productId: id, relatedProductId, sortOrder })),
+            }),
+        ]);
+        await this.cacheService.invalidateRelated();
+        return this.getWearWith(id);
+    }
+
+    private async ensureProduct(id: number): Promise<void> {
+        const product = await this.prisma.product.findFirst({
+            where: { id, deletedAt: null },
+            select: { id: true },
+        });
+        if (!product) throw new NotFoundException(`Product with id ${id} not found`);
     }
 }

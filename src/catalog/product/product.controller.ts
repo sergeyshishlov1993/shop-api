@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -22,7 +23,7 @@ import { CacheService } from '../../cache/cache.service';
 import { Roles, SwaggerJwtAuth } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ProductService } from './product.service';
-import { CreateProductDto, QueryProductDto, UpdateProductDto } from './dto';
+import { CreateProductDto, QueryProductDto, SetWearWithDto, UpdateProductDto } from './dto';
 
 @ApiTags('Admin — Товары')
 @Controller('admin/products')
@@ -224,5 +225,43 @@ export class ProductController {
     await this.productService.remove(id);
     await this.cacheService.invalidateProduct();
     return { message: 'Product soft-deleted' };
+  }
+
+  @Get(':id/wear-with')
+  @ApiOperation({
+    summary: '«З чим носити» — список',
+    description: `**Доступ:** ADMIN
+
+**Відповідь:** впорядкований список карток \`{ id, name, slug, price, mainImage }\` (видалені товари відфільтровані).`,
+  })
+  @ApiParam({ name: 'id', description: 'Идентификатор товара', example: 1 })
+  @ApiResponse({ status: 200, description: 'Список товаров.' })
+  @ApiResponse({ status: 401, description: 'Требуется авторизация.' })
+  @ApiResponse({ status: 403, description: 'Доступ только для ADMIN.' })
+  @ApiResponse({ status: 404, description: 'Товар не найден.' })
+  async getWearWith(@Param('id', ParseIntPipe) id: number) {
+    return this.productService.getWearWith(id);
+  }
+
+  @Put(':id/wear-with')
+  @ApiOperation({
+    summary: '«З чим носити» — замінити список',
+    description: `**Доступ:** ADMIN
+
+**Бізнес-логіка:** повністю замінює список у переданому порядку. Валідація: товари існують і не видалені, без самого товару, унікальні, максимум 12. Порожній масив — очистити.
+
+**Побічні ефекти:** скидання кешу \`related:*\`.`,
+  })
+  @ApiParam({ name: 'id', description: 'Идентификатор товара', example: 1 })
+  @ApiResponse({ status: 200, description: 'Оновлений список товаров.' })
+  @ApiResponse({ status: 400, description: 'Ошибка валидации.' })
+  @ApiResponse({ status: 401, description: 'Требуется авторизация.' })
+  @ApiResponse({ status: 403, description: 'Доступ только для ADMIN.' })
+  @ApiResponse({ status: 404, description: 'Товар не найден.' })
+  async setWearWith(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetWearWithDto,
+  ) {
+    return this.productService.setWearWith(id, dto);
   }
 }

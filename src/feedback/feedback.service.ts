@@ -46,8 +46,11 @@ export class FeedbackService {
     return feedback;
   }
 
-  async findAll(status?: FeedbackStatus, page = 1, limit = 20) {
-    const where = { deletedAt: null, ...(status ? { status } : {}) };
+  async findAll(status?: FeedbackStatus, page = 1, limit = 20, deletedOnly = false) {
+    const where = {
+      deletedAt: deletedOnly ? { not: null } : null,
+      ...(status ? { status } : {}),
+    };
 
     const [items, totalCount] = await Promise.all([
       this.prisma.feedback.findMany({

@@ -64,7 +64,7 @@ export class OrderController {
   })
   @ApiHeader({
     name: 'x-idempotency-key',
-    required: false,
+    required: true,
     description: 'UUID для защиты от повторного создания заказа при ретрае',
     example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   })

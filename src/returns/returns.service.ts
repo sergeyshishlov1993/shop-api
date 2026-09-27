@@ -97,9 +97,10 @@ export class ReturnsService {
     return this.toDetail(request, await this.loadImages([request]), true);
   }
 
-  async getEligibility(userId: number, orderId: number) {
+  async getEligibility(userId: number, orderId: number, tx?: Prisma.TransactionClient) {
     await this.assertEnabled();
-    const order = await this.prisma.order.findFirst({
+    const db = tx ?? this.prisma;
+    const order = await db.order.findFirst({
       where: { id: orderId, userId },
       include: {
         items: { orderBy: { id: 'asc' } },
@@ -112,7 +113,7 @@ export class ReturnsService {
     });
     if (!order) throw new NotFoundException('Замовлення не знайдено');
 
-    const requested = await this.getRequestedQuantities(order.items.map((i) => i.id));
+    const requested = await this.getRequestedQuantities(order.items.map((i) => i.id), db);
     const images = await loadVariantImages(
       this.prisma,
       order.items.map((i) => i.productVariantId),
@@ -155,27 +156,6 @@ export class ReturnsService {
 
   async create(userId: number, dto: CreateReturnDto) {
     await this.assertEnabled();
-    const eligibility = await this.getEligibility(userId, dto.orderId);
-    if (!eligibility.eligible) {
-      throw new BadRequestException(eligibility.reason);
-    }
-
-    const seen = new Set<number>();
-    for (const item of dto.items) {
-      if (seen.has(item.orderItemId)) {
-        throw new BadRequestException('Позиції в заявці не повинні повторюватися');
-      }
-      seen.add(item.orderItemId);
-      const orderItem = eligibility.items.find((i) => i.orderItemId === item.orderItemId);
-      if (!orderItem) {
-        throw new BadRequestException(`Позиція ${item.orderItemId} не належить цьому замовленню`);
-      }
-      if (item.quantity > orderItem.returnableQty) {
-        throw new BadRequestException(
-          `Для «${orderItem.productName}» можна повернути не більше ${orderItem.returnableQty} шт.`,
-        );
-      }
-    }
 
     const photoFileIds = [...new Set(dto.photoFileIds ?? [])];
     if (photoFileIds.length > 0) {
@@ -189,21 +169,51 @@ export class ReturnsService {
     }
 
     const created = await this.createWithUniqueNumber((number) =>
-      this.prisma.returnRequest.create({
-        data: {
-          number,
-          orderId: dto.orderId,
-          userId,
-          reason: dto.reason,
-          comment: dto.comment?.trim() || null,
-          refundDetails: dto.refundDetails.trim(),
-          items: {
-            create: dto.items.map((i) => ({ orderItemId: i.orderItemId, quantity: i.quantity })),
+      this.prisma.$transaction(async (tx) => {
+        // Serialize return-quantity checks for the same order until its request is inserted.
+        const lockedOrders = await tx.$queryRaw<Array<{ id: number }>>`
+          SELECT "id" FROM "Order"
+          WHERE "id" = ${dto.orderId} AND "userId" = ${userId}
+          FOR UPDATE
+        `;
+        if (lockedOrders.length === 0) throw new NotFoundException('Замовлення не знайдено');
+
+        const eligibility = await this.getEligibility(userId, dto.orderId, tx);
+        if (!eligibility.eligible) throw new BadRequestException(eligibility.reason);
+
+        const seen = new Set<number>();
+        for (const item of dto.items) {
+          if (seen.has(item.orderItemId)) {
+            throw new BadRequestException('Позиції в заявці не повинні повторюватися');
+          }
+          seen.add(item.orderItemId);
+          const orderItem = eligibility.items.find((i) => i.orderItemId === item.orderItemId);
+          if (!orderItem) {
+            throw new BadRequestException(`Позиція ${item.orderItemId} не належить цьому замовленню`);
+          }
+          if (item.quantity > orderItem.returnableQty) {
+            throw new BadRequestException(
+              `Для «${orderItem.productName}» можна повернути не більше ${orderItem.returnableQty} шт.`,
+            );
+          }
+        }
+
+        return tx.returnRequest.create({
+          data: {
+            number,
+            orderId: dto.orderId,
+            userId,
+            reason: dto.reason,
+            comment: dto.comment?.trim() || null,
+            refundDetails: dto.refundDetails.trim(),
+            items: {
+              create: dto.items.map((i) => ({ orderItemId: i.orderItemId, quantity: i.quantity })),
+            },
+            photos: { create: photoFileIds.map((fileId) => ({ fileId })) },
+            history: { create: { status: ReturnStatus.NEW, byAdmin: false } },
           },
-          photos: { create: photoFileIds.map((fileId) => ({ fileId })) },
-          history: { create: { status: ReturnStatus.NEW, byAdmin: false } },
-        },
-        include: RETURN_INCLUDE,
+          include: RETURN_INCLUDE,
+        });
       }),
     );
 
@@ -364,17 +374,22 @@ export class ReturnsService {
 
     const restockedProducts = new Map<number, string>();
     const updated = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.returnRequest.update({
-        where: { id },
+      const transition = await tx.returnRequest.updateMany({
+        where: { id, status: request.status },
         data: {
           status: dto.status,
           ...(managerComment !== undefined && { managerComment }),
           ...(dto.status === ReturnStatus.REJECTED && { rejectReason }),
           ...(dto.status === ReturnStatus.REFUNDED && { refundAmount: dto.refundAmount }),
-          history: { create: { status: dto.status, comment, byAdmin: true } },
         },
-        include: RETURN_INCLUDE,
       });
+      if (transition.count !== 1) {
+        throw new BadRequestException('Статус заявки вже змінено; оновіть сторінку');
+      }
+      await tx.returnStatusHistory.create({
+        data: { returnRequestId: id, status: dto.status, comment, byAdmin: true },
+      });
+      const result = await tx.returnRequest.findUniqueOrThrow({ where: { id }, include: RETURN_INCLUDE });
 
       // Посилку отримано на складі — повертаємо залишки варіантів (кількість із заявки).
       // Вихід зі статусу «Отримано» назад у «Схвалено» або у «Відхилено» (товар повертаємо клієнту) — списуємо їх назад.
@@ -456,8 +471,11 @@ export class ReturnsService {
     });
   }
 
-  private async getRequestedQuantities(orderItemIds: number[]) {
-    const rows = await this.prisma.returnRequestItem.groupBy({
+  private async getRequestedQuantities(
+    orderItemIds: number[],
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const rows = await db.returnRequestItem.groupBy({
       by: ['orderItemId'],
       where: {
         orderItemId: { in: orderItemIds },

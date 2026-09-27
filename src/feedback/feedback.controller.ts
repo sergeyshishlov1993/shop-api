@@ -93,6 +93,12 @@ export class FeedbackController {
     description: 'Количество на странице',
     example: '20',
   })
+  @ApiQuery({
+    name: 'deletedOnly',
+    required: false,
+    description: 'Показати лише приховані звернення',
+    example: 'true',
+  })
   @ApiResponse({
     status: 200,
     description: 'Список обращений с пагинацией.',
@@ -109,11 +115,13 @@ export class FeedbackController {
     @Query('status') status?: FeedbackStatus,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('deletedOnly') deletedOnly?: string,
   ) {
     return this.feedbackService.findAll(
       status,
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 20,
+      deletedOnly === 'true',
     );
   }
 

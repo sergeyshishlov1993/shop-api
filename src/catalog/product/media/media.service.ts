@@ -73,7 +73,17 @@ export class MediaService {
 
   async update(productId: number, id: number, dto: UpdateMediaDto) {
     await this.findProductOrThrow(productId);
-    await this.findMediaOrThrow(productId, id);
+    const media = await this.findMediaOrThrow(productId, id);
+
+    if (dto.isHover) {
+      if (media.mediaType !== 'IMAGE') {
+        throw new BadRequestException('Only IMAGE media can be hover');
+      }
+      await this.prisma.productMedia.updateMany({
+        where: { productId, isHover: true, id: { not: id } },
+        data: { isHover: false },
+      });
+    }
 
     if (dto.variantId !== undefined && dto.variantId !== null) {
       await this.validateVariant(productId, dto.variantId);

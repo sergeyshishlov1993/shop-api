@@ -20,6 +20,31 @@ interface AvailableVariantRow {
     material: string | null;
 }
 
+type ProductCardImage = { id: number; s3Key: string; s3KeyThumb: string | null; s3KeyMedium: string | null; s3KeyLarge: string | null };
+
+type CardMediaRow = { productId: number; isMain: boolean; isHover: boolean; file: ProductCardImage | null };
+
+/** hover: IMAGE з isHover; інакше перше не-головне фото за sortOrder (rows вже відсортовані). */
+export function pickHoverImage(rows: CardMediaRow[]): ProductCardImage | null {
+    const hover = rows.find((m) => m.isHover && m.file);
+    if (hover) return hover.file;
+    const imgs = rows.filter((m) => m.file);
+    const main = imgs.find((m) => m.isMain) ?? imgs[0];
+    return imgs.find((m) => m !== main)?.file ?? null;
+}
+
+type CardVariantRow = { id: number; stockQty: number; reservedQty: number; size: { name: string; sortOrder: number } | null };
+
+/** Розміри для швидкого додавання з картки + дефолтний варіант для товарів без розмірів. */
+export function buildCardSizes(variants: CardVariantRow[]) {
+    const sizes = variants
+        .filter((v) => v.size)
+        .sort((a, b) => a.size!.sortOrder - b.size!.sortOrder || a.id - b.id)
+        .map((v) => ({ variantId: v.id, name: v.size!.name, available: v.stockQty - v.reservedQty > 0 }));
+    const defaultVariantId = sizes.length ? null : (variants.find((v) => v.stockQty - v.reservedQty > 0)?.id ?? null);
+    return { sizes, defaultVariantId };
+}
+
 export interface ProductCard {
     id: number;
     name: string;
@@ -34,6 +59,9 @@ export interface ProductCard {
     effectivePrice: number;
     availabilityStatus: 'IN_STOCK' | 'LOW_STOCK';
     mainImage: { id: number; s3Key: string; s3KeyThumb: string | null; s3KeyMedium: string | null; s3KeyLarge: string | null } | null;
+    hoverImage: ProductCardImage | null;
+    sizes: { variantId: number; name: string; available: boolean }[];
+    defaultVariantId: number | null;
     hoverVideo: { id: number; s3Key: string; s3KeyThumb: string | null; s3KeyMedium: string | null; s3KeyLarge: string | null; fileType: FileType; originalName: string } | null;
     averageRating: number | null;
     reviewCount: number;
@@ -340,6 +368,25 @@ export class StorefrontService {
             include: { file: { select: { id: true, s3Key: true, s3KeyThumb: true, s3KeyMedium: true, s3KeyLarge: true } } },
         });
         const mediaMap = new Map(mainMedia.map((m) => [m.productId, m.file]));
+        const [imageMedia, variants] = await Promise.all([
+            this.prisma.productMedia.findMany({
+                where: { productId: { in: productIds }, mediaType: 'IMAGE', fileId: { not: null } },
+                orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+                select: { productId: true, isMain: true, isHover: true, file: { select: { id: true, s3Key: true, s3KeyThumb: true, s3KeyMedium: true, s3KeyLarge: true } } },
+            }),
+            this.prisma.productVariant.findMany({
+                where: { productId: { in: productIds }, isActive: true, deletedAt: null },
+                select: { id: true, productId: true, stockQty: true, reservedQty: true, size: { select: { name: true, sortOrder: true } } },
+                orderBy: { id: 'asc' },
+            }),
+        ]);
+        const group = <T extends { productId: number }>(rows: T[]) => {
+            const m = new Map<number, T[]>();
+            for (const r of rows) m.set(r.productId, [...(m.get(r.productId) ?? []), r]);
+            return m;
+        };
+        const imagesByProduct = group(imageMedia);
+        const variantsByProduct = group(variants);
         const reviewAggs = await this.prisma.review.groupBy({
             by: ['productId'],
             where: { productId: { in: productIds }, status: 'APPROVED', parentId: null },
@@ -370,6 +417,8 @@ export class StorefrontService {
                 effectivePrice: ps?.effectivePrice ?? p.basePrice,
                 availabilityStatus: ps?.availabilityStatus ?? 'LOW_STOCK',
                 mainImage: mediaMap.get(id) ?? null,
+                hoverImage: pickHoverImage(imagesByProduct.get(id) ?? []),
+                ...buildCardSizes(variantsByProduct.get(id) ?? []),
                 hoverVideo: p.hoverVideoFile ?? null,
                 averageRating: rv?.avg ?? null, reviewCount: rv?.count ?? 0,
             };

@@ -21,6 +21,10 @@ export class UpdateMediaDto {
   @IsOptional()
   isMain?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  isHover?: boolean;
+
   @IsNumber()
   @Min(0)
   @Max(1)

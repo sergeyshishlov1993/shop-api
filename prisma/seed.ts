@@ -13,6 +13,9 @@ const prisma = new PrismaClient();
 async function seedAdmin(): Promise<void> {
     const email = process.env.ADMIN_EMAIL || 'admin@example.com';
     const password = process.env.ADMIN_PASSWORD || 'changeme';
+    if (process.env.NODE_ENV === 'production' && (password === 'changeme' || password.length < 12)) {
+        throw new Error('ADMIN_PASSWORD must be set (12+ chars, not "changeme") in production');
+    }
     const passwordHash = await bcrypt.hash(password, 10);
 
     await prisma.user.upsert({

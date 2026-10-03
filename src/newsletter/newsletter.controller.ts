@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/decorators';
@@ -11,6 +12,7 @@ export class NewsletterController {
 
   @Public()
   @Post('subscribe')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Підписка на розсилку (double opt-in)' })
   subscribe(@Body() dto: SubscribeNewsletterDto) {

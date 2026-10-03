@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
-  ApiExcludeEndpoint,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -30,30 +29,6 @@ import { CartService } from './cart.service';
 @ApiBearerAuth('bearer')
 export class CartController {
   constructor(private readonly cartService: CartService) {}
-
-  @Get('_owner')
-  @ApiExcludeEndpoint()
-  getCartOwner(
-    @Req() req: Request & { user?: { sub?: number; id?: number } },
-    @CartSessionId() sessionId: string | null,
-  ) {
-    return this.cartService.resolveCartOwner(this.resolveOwner(req, sessionId));
-  }
-
-  @Get('_debug')
-  @ApiExcludeEndpoint()
-  getDebug(
-    @Req() req: Request & {
-      user?: { sub?: number; id?: number; email?: string; role?: string };
-    },
-    @CartSessionId() sessionId: string | null,
-  ) {
-    return {
-      cookiesSessionId: sessionId,
-      user: req.user ?? null,
-      ownerInput: this.resolveOwner(req, sessionId),
-    };
-  }
 
   @Get()
   @ApiOperation({

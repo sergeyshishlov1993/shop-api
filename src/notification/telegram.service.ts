@@ -22,11 +22,11 @@ export class TelegramService {
 
   private async sendMessage(
     text: string,
-    enabledField: 'notifyOnNewOrder' | 'notifyOnNewReview' | 'notifyOnNewFeedback' | 'notifyOnLowStock',
+    enabledField?: 'notifyOnNewOrder' | 'notifyOnNewReview' | 'notifyOnNewFeedback' | 'notifyOnLowStock',
   ): Promise<void> {
     try {
       const settings = await this.prisma.storeSettings.findUnique({ where: { id: 1 } });
-      if (settings && !settings[enabledField]) return;
+      if (enabledField && settings && !settings[enabledField]) return;
 
       const token = settings?.telegramBotToken || this.configService.get<string>('TELEGRAM_BOT_TOKEN');
 
@@ -166,5 +166,11 @@ export class TelegramService {
     `.trim();
 
     await this.sendMessage(text, 'notifyOnLowStock');
+  }
+
+  // Ошибки сервера — в тот же чат, без тумблера в настройках
+  async sendErrorAlert(data: { title: string; details?: string }): Promise<void> {
+    const details = data.details ? `\n<pre>${this.escapeHtml(data.details.slice(0, 3000))}</pre>` : '';
+    await this.sendMessage(`🔥 <b>${this.escapeHtml(data.title)}</b>${details}`);
   }
 }

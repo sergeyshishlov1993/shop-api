@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -11,6 +12,7 @@ export class StockNotificationController {
   constructor(private readonly service: StockNotificationService) {}
 
   @Post()
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({ summary: 'Підписатися на сповіщення про надходження товару' })
   subscribe(

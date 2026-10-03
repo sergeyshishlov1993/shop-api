@@ -84,7 +84,7 @@ export class AccountController {
     }
 
     @Post('avatar')
-    @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
     @ApiConsumes('multipart/form-data')
     @ApiOperation({ summary: 'Завантажити або замінити аватар користувача' })
     @ApiBody({

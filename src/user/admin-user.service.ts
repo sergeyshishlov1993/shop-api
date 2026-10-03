@@ -1,12 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { CacheService } from '../cache/cache.service';
+import { authUserCacheKey } from '../auth/strategies/jwt.strategy';
 import { AdminGetUsersQueryDto } from './dto/admin-get-users-query.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 
 @Injectable()
 export class AdminUserService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cacheService: CacheService,
+  ) {}
 
   async getUsers(query: AdminGetUsersQueryDto) {
     const where: Prisma.UserWhereInput = {
@@ -83,6 +88,7 @@ export class AdminUserService {
       throw new BadRequestException('You cannot remove your own administrator role');
     }
     const { passwordHash, ...result } = await this.prisma.user.update({ where: { id }, data: dto as Record<string, unknown> });
+    await this.cacheService.del(authUserCacheKey(id));
     return result;
   }
 }

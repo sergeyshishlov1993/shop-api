@@ -15,6 +15,13 @@ export class CacheService {
     await this.redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
   }
 
+  // Атомарный счётчик; TTL ставится при первом инкременте
+  async incr(key: string, ttlSeconds: number): Promise<number> {
+    const n = await this.redis.incr(key);
+    if (n === 1) await this.redis.expire(key, ttlSeconds);
+    return n;
+  }
+
   async del(key: string): Promise<void> {
     await this.redis.del(key);
   }

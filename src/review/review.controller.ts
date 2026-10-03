@@ -73,7 +73,7 @@ export class ReviewController {
 
   @Post()
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FilesInterceptor('media', 5))
+  @UseInterceptors(FilesInterceptor('media', 5, { limits: { fileSize: 50 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data', 'application/json')
   @SwaggerJwtAuth()
   @ApiOperation({
@@ -139,7 +139,7 @@ export class ReviewActionsController {
   }
 
   @Post('replies')
-  @UseInterceptors(FilesInterceptor('media', 5))
+  @UseInterceptors(FilesInterceptor('media', 5, { limits: { fileSize: 50 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiOperation({
     summary: 'Ответить на отзыв',
@@ -155,7 +155,7 @@ export class ReviewActionsController {
   }
 
   @Patch()
-  @UseInterceptors(FilesInterceptor('media', 5))
+  @UseInterceptors(FilesInterceptor('media', 5, { limits: { fileSize: 50 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiOperation({
     summary: 'Редактировать свой отзыв/ответ',

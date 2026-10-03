@@ -1,14 +1,19 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
-import { ProductType, SizeType } from '@prisma/client';
+import { MediaType, ProductType, SizeType } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { FileService } from '../file/file.service';
-import { parseCsv } from './csv.util';
-import { parseYml, YmlOffer } from './yml.util';
+import { decodeText, parseCsv, parseNumber } from './csv.util';
+import { parseYml, YmlCategory, YmlOffer } from './yml.util';
 import { uniqueSlug } from './slug.util';
 
 export type StockMapping = { sku: number; price?: number; stockQty?: number };
+// Индексы колонок таблицы для импорта товаров; обязательны только sku и name
+export const PRODUCT_FIELDS = [
+  'sku', 'name', 'category', 'price', 'oldPrice', 'stockQty', 'size', 'color', 'brand', 'description', 'group', 'pictures',
+] as const;
+export type ProductMapping = Partial<Record<(typeof PRODUCT_FIELDS)[number], number>>;
 
 @Injectable()
 export class ImportService {
@@ -21,7 +26,7 @@ export class ImportService {
   private rowsFrom(buffer: Buffer, fileName = ''): string[][] {
     // XLSX — zip-архив (сигнатура PK)
     const isXlsx = /\.xlsx$/i.test(fileName) || buffer.subarray(0, 2).toString() === 'PK';
-    const rows = isXlsx ? this.xlsxRows(buffer) : parseCsv(buffer.toString('utf-8'));
+    const rows = isXlsx ? this.xlsxRows(buffer) : parseCsv(decodeText(buffer));
     if (rows.length < 2) throw new BadRequestException('Файл порожній або без даних.');
     return rows;
   }
@@ -64,12 +69,12 @@ export class ImportService {
 
       const data: { price?: number; stockQty?: number } = {};
       if (mapping.price !== undefined) {
-        const p = Number(String(r[mapping.price]).replace(',', '.'));
-        if (!Number.isNaN(p)) data.price = p;
+        const p = parseNumber(r[mapping.price]);
+        if (p !== undefined) data.price = p;
       }
       if (mapping.stockQty !== undefined) {
-        const s = parseInt(String(r[mapping.stockQty]), 10);
-        if (!Number.isNaN(s)) data.stockQty = s;
+        const q = parseNumber(r[mapping.stockQty]);
+        if (q !== undefined) data.stockQty = Math.max(0, Math.trunc(q));
       }
       if (Object.keys(data).length > 0) {
         await this.prisma.productVariant.update({ where: { sku }, data });
@@ -84,7 +89,104 @@ export class ImportService {
   async runYml(buffer: Buffer) {
     const { categories, offers } = parseYml(buffer.toString('utf-8'));
     if (offers.length === 0) throw new BadRequestException('У файлі немає товарів (offer).');
+    return this.upsertOffers(categories, offers);
+  }
 
+  // Таблица (CSV/XLSX из Google Sheets, 1С, Excel) -> те же офферы, что и YML.
+  // Категория: "Жінкам > Сукні" создаёт вложенность. Группа (модель) или, если её нет,
+  // название объединяют строки в один товар с вариантами размер/колір.
+  async runProducts(buffer: Buffer, mapping: ProductMapping, fileName?: string) {
+    if (mapping.sku === undefined || mapping.name === undefined) {
+      throw new BadRequestException('Оберіть колонки SKU та назви.');
+    }
+    const cell = (r: string[], key: keyof ProductMapping) =>
+      mapping[key] === undefined ? undefined : (r[mapping[key]!] ?? '').trim() || undefined;
+
+    const categories = new Map<string, YmlCategory>();
+    const categoryId = (path?: string) => {
+      let parentId: string | undefined;
+      for (const name of (path ?? '').split('>').map((x) => x.trim()).filter(Boolean)) {
+        const id = parentId ? `${parentId}>${name}` : name;
+        if (!categories.has(id)) categories.set(id, { id, parentId, name });
+        parentId = id;
+      }
+      return parentId;
+    };
+
+    const offers: YmlOffer[] = [];
+    for (const r of this.rowsFrom(buffer, fileName).slice(1)) {
+      const sku = cell(r, 'sku');
+      const name = cell(r, 'name');
+      if (!sku || !name) continue;
+      const stockQty = parseNumber(cell(r, 'stockQty'));
+      offers.push({
+        id: sku,
+        sku,
+        groupId: cell(r, 'group') ?? name,
+        available: stockQty === undefined || stockQty > 0,
+        name,
+        description: cell(r, 'description'),
+        price: parseNumber(cell(r, 'price')),
+        oldPrice: parseNumber(cell(r, 'oldPrice')),
+        vendor: cell(r, 'brand'),
+        categoryId: categoryId(cell(r, 'category')),
+        stockQty: stockQty === undefined ? undefined : Math.max(0, Math.trunc(stockQty)),
+        pictures: (cell(r, 'pictures') ?? '').split(/[\s,;]+/).filter((u) => /^https?:\/\//i.test(u)),
+        size: cell(r, 'size'),
+        color: cell(r, 'color'),
+      });
+    }
+    if (offers.length === 0) throw new BadRequestException('Немає рядків із SKU та назвою.');
+    return this.upsertOffers([...categories.values()], offers);
+  }
+
+  // Фото пачкой: имя файла = SKU варианта ("ABC-1.jpg", "ABC-1_2.jpg" — второе фото того же товара).
+  // Фото добавляются в конец галереи товара; первое фото товара без медиа становится главным.
+  async importPhotos(files: Express.Multer.File[]) {
+    const baseName = (f: Express.Multer.File) => f.originalname.replace(/\.[^.]+$/, '').trim();
+    // По имени без расширения: "ABC.jpg" раньше "ABC_2.jpg", "_2" раньше "_10"
+    const sorted = [...files].sort((x, y) => baseName(x).localeCompare(baseName(y), undefined, { numeric: true }));
+    const errors: string[] = [];
+    const notFound: string[] = [];
+    let attached = 0;
+
+    for (const f of sorted) {
+      const base = baseName(f);
+      try {
+        const variant =
+          (await this.prisma.productVariant.findUnique({ where: { sku: base }, select: { id: true, productId: true } }))
+          ?? (await this.prisma.productVariant.findUnique({
+            where: { sku: base.replace(/[_-]\d+$/, '') },
+            select: { id: true, productId: true },
+          }));
+        if (!variant) { notFound.push(f.originalname); continue; }
+
+        const last = await this.prisma.productMedia.findFirst({
+          where: { productId: variant.productId },
+          orderBy: { sortOrder: 'desc' },
+          select: { sortOrder: true },
+        });
+        const uploaded = await this.fileService.upload(f);
+        await this.prisma.productMedia.create({
+          data: {
+            productId: variant.productId,
+            fileId: uploaded.id,
+            mediaType: uploaded.fileType as MediaType,
+            sortOrder: last ? last.sortOrder + 1 : 0,
+            isMain: !last,
+          },
+        });
+        attached++;
+      } catch (e) {
+        errors.push(`${f.originalname}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    await this.cacheService.invalidateProduct();
+    return { attached, notFound, errors };
+  }
+
+  private async upsertOffers(categories: YmlCategory[], offers: YmlOffer[]) {
     const errors: string[] = [];
     let created = 0;
     let updated = 0;
@@ -204,6 +306,7 @@ export class ImportService {
     let sortOrder = 0;
     for (const url of urls) {
       try {
+        if (!/^https?:\/\//i.test(url)) throw new Error('only http(s) URLs');
         const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buffer = Buffer.from(await res.arrayBuffer());

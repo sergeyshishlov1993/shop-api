@@ -14,6 +14,7 @@ describe('AuthService', () => {
   let cart: any;
   let service: AuthService;
   let email: any;
+  let cache: any;
 
   const user = { id: 1, email: 'a@b.c', role: 'CUSTOMER', isActive: true, passwordHash: 'H' };
 
@@ -32,7 +33,8 @@ describe('AuthService', () => {
     };
     cart = { mergeGuestCartToUser: jest.fn() };
     email = { sendPasswordResetEmail: jest.fn() };
-    service = new AuthService(prisma, jwt, config as any, email, cart);
+    cache = { get: jest.fn().mockResolvedValue(null), incr: jest.fn(), del: jest.fn() };
+    service = new AuthService(prisma, jwt, config as any, email, cart, cache);
   });
 
   describe('register', () => {
@@ -84,10 +86,24 @@ describe('AuthService', () => {
       await expect(service.validateLocalUser('a@b.c', 'bad')).rejects.toThrow('Invalid credentials');
     });
 
-    it('returns user on correct password', async () => {
+    it('returns user on correct password and resets fail counter', async () => {
       prisma.user.findUnique.mockResolvedValue(user);
       compare.mockResolvedValue(true);
       await expect(service.validateLocalUser('a@b.c', 'ok')).resolves.toEqual({ id: 1, email: 'a@b.c', role: 'CUSTOMER' });
+      expect(cache.del).toHaveBeenCalledWith('login-fail:a@b.c');
+    });
+
+    it('counts failed attempts per email', async () => {
+      prisma.user.findUnique.mockResolvedValue(user);
+      compare.mockResolvedValue(false);
+      await expect(service.validateLocalUser('A@b.c', 'bad')).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(cache.incr).toHaveBeenCalledWith('login-fail:a@b.c', 900);
+    });
+
+    it('locks account after 5 failures without checking password', async () => {
+      cache.get.mockResolvedValue(5);
+      await expect(service.validateLocalUser('a@b.c', 'ok')).rejects.toMatchObject({ status: 429 });
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
     });
   });
 

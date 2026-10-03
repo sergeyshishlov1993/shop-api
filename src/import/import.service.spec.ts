@@ -11,7 +11,7 @@ function setup() {
     category: { findFirst: jest.fn(), create: jest.fn(), findUnique: jest.fn() },
     size: { findFirst: jest.fn(), create: jest.fn() },
     color: { findFirst: jest.fn(), create: jest.fn() },
-    productMedia: { create: jest.fn() },
+    productMedia: { create: jest.fn(), findFirst: jest.fn() },
   };
   const cache: any = { invalidateProduct: jest.fn() };
   const files: any = { upload: jest.fn() };
@@ -126,5 +126,110 @@ describe('ImportService.runYml', () => {
       `<offer id="1"><name>A</name><price>1</price></offer><offer id="2"><name>B</name><categoryId>1</categoryId></offer>`));
     expect(res.created).toBe(0);
     expect(res.errors).toEqual(['1: категорію не знайдено', '2: немає ціни']);
+  });
+});
+
+// Кодирование в windows-1251 для имитации выгрузки 1С (в Node нет встроенного энкодера)
+const cp1251 = (text: string) => {
+  const dec = new TextDecoder('windows-1251');
+  const map = new Map<string, number>();
+  for (let b = 0; b < 256; b++) map.set(dec.decode(Uint8Array.of(b)), b);
+  return Buffer.from([...text].map((ch) => map.get(ch) ?? 0x3f));
+};
+
+function productMocks(prisma: any) {
+  prisma.productVariant.findMany.mockResolvedValue([]);
+  prisma.category.findFirst.mockResolvedValue(null);
+  let catId = 100;
+  prisma.category.create.mockImplementation(async () => ({ id: ++catId }));
+  prisma.category.findUnique.mockImplementation(async ({ where }: any) => (where.id ? { productType: 'CLOTHING' } : null));
+  prisma.product.findUnique.mockResolvedValue(null);
+  let productId = 0;
+  prisma.product.create.mockImplementation(async () => ({ id: ++productId }));
+  prisma.size.findFirst.mockResolvedValue(null);
+  prisma.size.create.mockImplementation(async ({ data }: any) => ({ id: data.name.charCodeAt(0) }));
+  prisma.color.findFirst.mockResolvedValue({ id: 5 });
+}
+
+describe('ImportService.runProducts', () => {
+  const mapping = { sku: 0, name: 1, category: 2, price: 3, stockQty: 4, size: 5, color: 6 };
+
+  it('requires sku and name columns', async () => {
+    const { service } = setup();
+    await expect(service.runProducts(csv('a\n1'), { sku: 0 })).rejects.toThrow(BadRequestException);
+  });
+
+  it('1С CSV: windows-1251, ";" separator, "1 234,50" prices -> one product with size variants', async () => {
+    const { service, prisma } = setup();
+    productMocks(prisma);
+    const file = cp1251(
+      'Артикул;Найменування;Категорія;Ціна;Залишок;Розмір;Колір\r\n'
+      + 'D-1-S;Сукня льон;Жінкам > Сукні;1 234,50;3;S;Бежевий\r\n'
+      + 'D-1-M;Сукня льон;Жінкам > Сукні;1 234,50;0;M;Бежевий\r\n'
+      + ';без артикула;;;;;\r\n',
+    );
+
+    const res = await service.runProducts(file, mapping, 'export.csv');
+
+    expect(res).toEqual({ created: 2, updated: 0, errors: [] });
+    expect(prisma.product.create).toHaveBeenCalledTimes(1);
+    expect(prisma.product.create.mock.calls[0][0].data).toMatchObject({ name: 'Сукня льон', basePrice: 1234.5, categoryId: 102 });
+    expect(prisma.category.create.mock.calls.map((c: any) => c[0].data)).toEqual([
+      expect.objectContaining({ name: 'Жінкам', parentId: undefined }),
+      expect.objectContaining({ name: 'Сукні', parentId: 101 }),
+    ]);
+    expect(prisma.productVariant.create.mock.calls.map((c: any) => c[0].data)).toEqual([
+      expect.objectContaining({ sku: 'D-1-S', price: 1234.5, stockQty: 3, colorId: 5 }),
+      expect.objectContaining({ sku: 'D-1-M', price: 1234.5, stockQty: 0, colorId: 5 }),
+    ]);
+  });
+
+  it('Google Sheets XLSX: numeric cells, group column splits products, re-import updates by SKU', async () => {
+    const { service, prisma } = setup();
+    productMocks(prisma);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['SKU', 'Name', 'Category', 'Price', 'Qty', 'Size', 'Color', 'Model'],
+      ['T-1', 'Футболка', 'Чоловікам', 499, 10, 'M', 'Black', 'tee-black'],
+      ['T-2', 'Футболка', 'Чоловікам', 499, 5, 'M', 'White', 'tee-white'],
+    ]), 'Sheet1');
+    const buf: Buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const res = await service.runProducts(buf, { ...mapping, group: 7 }, 'Каталог.xlsx');
+    expect(res).toEqual({ created: 2, updated: 0, errors: [] });
+    expect(prisma.product.create).toHaveBeenCalledTimes(2);
+
+    // повторный импорт того же файла — обновление, без дублей
+    prisma.product.create.mockClear();
+    prisma.productVariant.findMany.mockImplementation(async ({ where }: any) =>
+      where.sku.in.map((sku: string) => ({ sku, productId: 1 })));
+    prisma.product.update.mockResolvedValue({ productType: 'CLOTHING' });
+    const again = await service.runProducts(buf, { ...mapping, group: 7 }, 'Каталог.xlsx');
+    expect(again).toEqual({ created: 0, updated: 2, errors: [] });
+    expect(prisma.product.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportService.importPhotos', () => {
+  const file = (name: string) => ({ originalname: name, buffer: Buffer.from('x'), mimetype: 'image/jpeg', size: 1 }) as any;
+
+  it('matches files to variants by SKU (with _N suffix), first photo becomes main', async () => {
+    const { service, prisma, files } = setup();
+    prisma.productVariant.findUnique.mockImplementation(async ({ where }: any) =>
+      (where.sku === 'D-1-S' ? { id: 1, productId: 7 } : null));
+    let media = 0;
+    prisma.productMedia.findFirst.mockImplementation(async () => (media ? { sortOrder: media - 1 } : null));
+    prisma.productMedia.create.mockImplementation(async () => { media++; });
+    let fileId = 40;
+    files.upload.mockImplementation(async () => ({ id: ++fileId, fileType: 'IMAGE' }));
+
+    const res = await service.importPhotos([file('D-1-S_2.jpg'), file('nope.jpg'), file('D-1-S.jpg')]);
+
+    expect(res).toEqual({ attached: 2, notFound: ['nope.jpg'], errors: [] });
+    expect(files.upload.mock.calls.map((c: any) => c[0].originalname)).toEqual(['D-1-S.jpg', 'D-1-S_2.jpg']);
+    expect(prisma.productMedia.create.mock.calls.map((c: any) => c[0].data)).toEqual([
+      expect.objectContaining({ productId: 7, fileId: 41, sortOrder: 0, isMain: true }),
+      expect.objectContaining({ productId: 7, fileId: 42, sortOrder: 1, isMain: false }),
+    ]);
   });
 });

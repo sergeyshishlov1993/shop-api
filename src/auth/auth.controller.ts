@@ -16,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public, SwaggerJwtAuth } from '../common/decorators';
 import { AuthService } from './auth.service';
@@ -79,7 +79,7 @@ export class AuthController {
   }
 
   @Public()
-  @UseGuards(ThrottlerGuard, LocalAuthGuard)
+  @UseGuards(LocalAuthGuard)
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @Post('login')
   @ApiBody({ type: LoginDto })
@@ -210,7 +210,6 @@ export class AuthController {
   }
 
   @Public()
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { ttl: 3600000, limit: 3 } })
   @Post('forgot-password')
   @ApiOperation({

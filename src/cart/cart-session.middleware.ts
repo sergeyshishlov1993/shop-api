@@ -16,7 +16,7 @@ export class CartSessionMiddleware implements NestMiddleware {
     res.cookie('cartSessionId', sessionId, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       maxAge: 1000 * 60 * 60 * 24 * 30,
       path: '/',
     });

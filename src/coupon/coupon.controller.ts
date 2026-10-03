@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/decorators';
@@ -11,6 +12,7 @@ export class CouponController {
 
   @Public()
   @Post('validate')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Проверить промокод под сумму корзины' })
   validate(@Body() dto: ValidateCouponDto) {

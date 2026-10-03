@@ -1,5 +1,5 @@
 import { MediaType } from '@prisma/client';
-import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 export class CreateHeroSlideDto {
   @IsString()
@@ -15,6 +15,8 @@ export class CreateHeroSlideDto {
 
   @IsOptional()
   @IsString()
+  // Только внутренний путь или http(s) — без javascript:/data: и protocol-relative //
+  @Matches(/^($|\/(?![/\\])|https?:\/\/)/, { message: 'buttonLink must start with / or http(s)://' })
   buttonLink?: string;
 
   @IsInt()

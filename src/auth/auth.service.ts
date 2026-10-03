@@ -1,7 +1,10 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -9,6 +12,7 @@ import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { hashToken } from './token-hash';
 import { randomUUID } from 'crypto';
+import { CacheService } from '../cache/cache.service';
 import { CartService } from '../cart/cart.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -18,16 +22,32 @@ import { Tokens } from './types/tokens.type';
 
 // Скільки старий refresh-токен лишається дійсним після ротації
 const REFRESH_GRACE_PERIOD_MS = 30_000;
+// Блокировка входа в аккаунт после N неудачных попыток (поверх лимита по IP)
+const MAX_LOGIN_FAILS = 5;
+const LOGIN_LOCK_SECONDS = 15 * 60;
+
+export type LoginMeta = { ip?: string; userAgent?: string };
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger('Auth');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
     private readonly cartService: CartService,
+    private readonly cacheService: CacheService,
   ) {}
+
+  // Одна строка на вход — для отладки «кто и когда зашёл». Пароли/токены не пишем.
+  private logLogin(event: string, who: string, meta: LoginMeta = {}): void {
+    const clean = (v?: string) => (v ?? '-').replace(/[\r\n]+/g, ' ').slice(0, 200);
+    const line = `${event} ${clean(who)} ip=${clean(meta.ip)} ua="${clean(meta.userAgent)}"`;
+    if (event.includes('fail')) this.logger.warn(line);
+    else this.logger.log(line);
+  }
 
   async register(
     dto: RegisterDto,
@@ -58,6 +78,7 @@ export class AuthService {
       sessionId,
     });
 
+    this.logLogin('register ok', `user=${user.id} ${user.email}`, { ip, userAgent });
     return this.generateTokensAndCreateSession(
       user.id,
       user.email,
@@ -70,23 +91,37 @@ export class AuthService {
   async validateLocalUser(
     email: string,
     password: string,
+    meta: LoginMeta = {},
   ): Promise<{ id: number; email: string; role: string }> {
+    const failKey = `login-fail:${email.toLowerCase()}`;
+    if (((await this.cacheService.get<number>(failKey)) ?? 0) >= MAX_LOGIN_FAILS) {
+      this.logLogin('login fail(locked)', email, meta);
+      throw new HttpException('Too many failed login attempts, try again later', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { email },
     });
 
     if (!user || !user.passwordHash) {
+      await this.cacheService.incr(failKey, LOGIN_LOCK_SECONDS);
+      this.logLogin('login fail(no-user)', email, meta);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.isActive) {
+      this.logLogin('login fail(deactivated)', `user=${user.id} ${email}`, meta);
       throw new UnauthorizedException('Account is deactivated');
     }
 
     if (!(await bcrypt.compare(password, user.passwordHash))) {
+      await this.cacheService.incr(failKey, LOGIN_LOCK_SECONDS);
+      this.logLogin('login fail(password)', `user=${user.id} ${email}`, meta);
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    await this.cacheService.del(failKey);
+    this.logLogin('login ok', `user=${user.id} ${email}`, meta);
     return { id: user.id, email: user.email, role: user.role };
   }
 
@@ -131,9 +166,11 @@ export class AuthService {
 
     if (providerAccount) {
       if (!providerAccount.user.isActive) {
+        this.logLogin('google fail(deactivated)', `user=${providerAccount.user.id} ${providerAccount.user.email}`, { ip, userAgent });
         throw new UnauthorizedException('Account is deactivated');
       }
 
+      this.logLogin('google ok', `user=${providerAccount.user.id} ${providerAccount.user.email}`, { ip, userAgent });
       return this.generateTokensAndCreateSession(
         providerAccount.user.id,
         providerAccount.user.email,
@@ -149,6 +186,7 @@ export class AuthService {
 
     if (existingUser) {
       if (!existingUser.isActive) {
+        this.logLogin('google fail(deactivated)', `user=${existingUser.id} ${existingUser.email}`, { ip, userAgent });
         throw new UnauthorizedException('Account is deactivated');
       }
 
@@ -160,6 +198,7 @@ export class AuthService {
         },
       });
 
+      this.logLogin('google ok', `user=${existingUser.id} ${existingUser.email}`, { ip, userAgent });
       return this.generateTokensAndCreateSession(
         existingUser.id,
         existingUser.email,
@@ -183,6 +222,7 @@ export class AuthService {
       },
     });
 
+    this.logLogin('google ok', `user=${newUser.id} ${newUser.email}`, { ip, userAgent });
     return this.generateTokensAndCreateSession(
       newUser.id,
       newUser.email,

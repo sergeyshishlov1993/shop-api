@@ -11,6 +11,7 @@ import { CacheService } from './cache.service';
       useFactory: (configService: ConfigService) => ({
         type: 'single' as const,
         url: `redis://${configService.get<string>('REDIS_HOST')}:${configService.get<number>('REDIS_PORT')}`,
+        options: { password: configService.get<string>('REDIS_PASSWORD') || undefined },
       }),
     }),
   ],

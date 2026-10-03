@@ -38,7 +38,7 @@ export class ReturnsController {
   }
 
   @Post('returns/photos')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Завантажити фото для заявки на повернення (JPEG/PNG/WebP, ≤10 МБ)' })
   @ApiBody({

@@ -54,6 +54,8 @@ export class S3Service implements OnModuleInit {
       Key: options.key,
       Body: options.body,
       ContentType: options.contentType,
+      // Ключ содержит UUID (buildKey) — файл по ключу никогда не меняется, браузер кеширует навсегда
+      CacheControl: 'public, max-age=31536000, immutable',
     }));
     return this.getPublicUrl(options.key);
   }

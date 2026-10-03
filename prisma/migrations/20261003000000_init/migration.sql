@@ -1,3 +1,6 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateEnum
 CREATE TYPE "UserRole" AS ENUM ('USER', 'ADMIN');
 
@@ -14,6 +17,12 @@ CREATE TYPE "ReviewStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE "OrderStatus" AS ENUM ('NEW', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED');
 
 -- CreateEnum
+CREATE TYPE "PaymentMethod" AS ENUM ('COD', 'ONLINE');
+
+-- CreateEnum
+CREATE TYPE "PaymentStatus" AS ENUM ('NOT_REQUIRED', 'PENDING', 'PAID', 'FAILED', 'REFUNDED');
+
+-- CreateEnum
 CREATE TYPE "PromoBlockType" AS ENUM ('NEW', 'HIT', 'SEASONAL', 'CUSTOM');
 
 -- CreateEnum
@@ -26,7 +35,19 @@ CREATE TYPE "MediaType" AS ENUM ('IMAGE', 'VIDEO');
 CREATE TYPE "ExpenseType" AS ENUM ('PURCHASE', 'LOGISTICS', 'ADVERTISING', 'PACKAGING', 'SALARY', 'SERVICES', 'RETURN', 'OTHER');
 
 -- CreateEnum
+CREATE TYPE "ReturnStatus" AS ENUM ('NEW', 'UNDER_REVIEW', 'APPROVED', 'RECEIVED', 'REFUNDED', 'REJECTED', 'CANCELLED');
+
+-- CreateEnum
+CREATE TYPE "ReturnReason" AS ENUM ('WRONG_SIZE', 'DEFECT', 'NOT_AS_DESCRIBED', 'CHANGED_MIND', 'OTHER');
+
+-- CreateEnum
 CREATE TYPE "FeedbackStatus" AS ENUM ('NEW', 'IN_PROGRESS', 'DONE');
+
+-- CreateEnum
+CREATE TYPE "CouponDiscountType" AS ENUM ('PERCENT', 'FIXED');
+
+-- CreateEnum
+CREATE TYPE "NewsletterStatus" AS ENUM ('PENDING', 'CONFIRMED', 'UNSUBSCRIBED');
 
 -- CreateTable
 CREATE TABLE "User" (
@@ -66,6 +87,7 @@ CREATE TABLE "RefreshSession" (
     "ip" TEXT,
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "revokedAt" TIMESTAMP(3),
+    "rotatedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "RefreshSession_pkey" PRIMARY KEY ("id")
@@ -113,6 +135,12 @@ CREATE TABLE "Category" (
     "productType" "ProductType",
     "imageFileId" INTEGER,
     "bannerFileId" INTEGER,
+    "focalX" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalY" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     "metaTitle" TEXT,
     "metaDescription" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
@@ -153,10 +181,21 @@ CREATE TABLE "Product" (
 );
 
 -- CreateTable
+CREATE TABLE "ProductWearWith" (
+    "productId" INTEGER NOT NULL,
+    "relatedProductId" INTEGER NOT NULL,
+    "sortOrder" INTEGER NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ProductWearWith_pkey" PRIMARY KEY ("productId","relatedProductId")
+);
+
+-- CreateTable
 CREATE TABLE "ProductVariant" (
     "id" SERIAL NOT NULL,
     "productId" INTEGER NOT NULL,
     "sku" TEXT NOT NULL,
+    "barcode" TEXT,
     "sizeId" INTEGER,
     "colorId" INTEGER,
     "price" DOUBLE PRECISION,
@@ -221,15 +260,37 @@ CREATE TABLE "FileAsset" (
 );
 
 -- CreateTable
+CREATE TABLE "ReviewLike" (
+    "reviewId" INTEGER NOT NULL,
+    "userId" INTEGER NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ReviewLike_pkey" PRIMARY KEY ("reviewId","userId")
+);
+
+-- CreateTable
+CREATE TABLE "ReviewMedia" (
+    "id" SERIAL NOT NULL,
+    "reviewId" INTEGER NOT NULL,
+    "fileId" INTEGER NOT NULL,
+    "mediaType" "MediaType" NOT NULL,
+
+    CONSTRAINT "ReviewMedia_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "ProductMedia" (
     "id" SERIAL NOT NULL,
     "productId" INTEGER NOT NULL,
     "variantId" INTEGER,
-    "fileId" INTEGER NOT NULL,
+    "fileId" INTEGER,
+    "externalUrl" TEXT,
     "mediaType" "MediaType" NOT NULL,
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
     "isMain" BOOLEAN NOT NULL DEFAULT false,
     "isHover" BOOLEAN NOT NULL DEFAULT false,
+    "focalX" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalY" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "ProductMedia_pkey" PRIMARY KEY ("id")
@@ -246,6 +307,12 @@ CREATE TABLE "HeroSlide" (
     "mediaType" "MediaType" NOT NULL,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "focalX" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalY" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -259,6 +326,13 @@ CREATE TABLE "PromoBlock" (
     "title" TEXT NOT NULL,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "imageFileId" INTEGER,
+    "focalX" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalY" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYTablet" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalXMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "focalYMobile" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -309,6 +383,8 @@ CREATE TABLE "Review" (
     "rating" INTEGER,
     "text" TEXT NOT NULL,
     "depth" INTEGER NOT NULL DEFAULT 0,
+    "likesCount" INTEGER NOT NULL DEFAULT 0,
+    "editedAt" TIMESTAMP(3),
     "status" "ReviewStatus" NOT NULL DEFAULT 'PENDING',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -350,7 +426,9 @@ CREATE TABLE "Order" (
     "customerEmail" TEXT,
     "deliveryProvider" TEXT,
     "city" TEXT,
+    "cityRef" TEXT,
     "warehouse" TEXT,
+    "warehouseRef" TEXT,
     "addressLine" TEXT,
     "postalCode" TEXT,
     "deliveryComment" TEXT,
@@ -372,6 +450,12 @@ CREATE TABLE "Order" (
     "utmTerm" TEXT,
     "referer" TEXT,
     "idempotencyKey" TEXT,
+    "paymentMethod" "PaymentMethod" NOT NULL DEFAULT 'COD',
+    "paymentStatus" "PaymentStatus" NOT NULL DEFAULT 'NOT_REQUIRED',
+    "paymentProvider" TEXT,
+    "paymentId" TEXT,
+    "paidAt" TIMESTAMP(3),
+    "couponCode" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -410,6 +494,57 @@ CREATE TABLE "OrderStatusHistory" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "OrderStatusHistory_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ReturnRequest" (
+    "id" SERIAL NOT NULL,
+    "number" TEXT NOT NULL,
+    "orderId" INTEGER NOT NULL,
+    "userId" INTEGER NOT NULL,
+    "status" "ReturnStatus" NOT NULL DEFAULT 'NEW',
+    "reason" "ReturnReason" NOT NULL,
+    "comment" TEXT,
+    "refundDetails" TEXT NOT NULL,
+    "trackingNumber" TEXT,
+    "refundAmount" DOUBLE PRECISION,
+    "managerComment" TEXT,
+    "rejectReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ReturnRequest_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ReturnRequestItem" (
+    "id" SERIAL NOT NULL,
+    "returnRequestId" INTEGER NOT NULL,
+    "orderItemId" INTEGER NOT NULL,
+    "quantity" INTEGER NOT NULL,
+
+    CONSTRAINT "ReturnRequestItem_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ReturnRequestPhoto" (
+    "id" SERIAL NOT NULL,
+    "returnRequestId" INTEGER NOT NULL,
+    "fileId" INTEGER NOT NULL,
+
+    CONSTRAINT "ReturnRequestPhoto_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ReturnStatusHistory" (
+    "id" SERIAL NOT NULL,
+    "returnRequestId" INTEGER NOT NULL,
+    "status" "ReturnStatus" NOT NULL,
+    "comment" TEXT,
+    "byAdmin" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ReturnStatusHistory_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -452,11 +587,85 @@ CREATE TABLE "StoreSettings" (
     "defaultLowStockThreshold" INTEGER NOT NULL DEFAULT 3,
     "currency" TEXT NOT NULL DEFAULT 'UAH',
     "telegramAdminChatId" TEXT,
+    "telegramBotToken" TEXT,
+    "notifyOnNewOrder" BOOLEAN NOT NULL DEFAULT true,
+    "notifyOnNewReview" BOOLEAN NOT NULL DEFAULT true,
+    "notifyOnNewFeedback" BOOLEAN NOT NULL DEFAULT true,
+    "notifyOnLowStock" BOOLEAN NOT NULL DEFAULT true,
+    "novaPoshtaApiKey" TEXT,
+    "npSenderRef" TEXT,
+    "npSenderContactRef" TEXT,
+    "npSenderCityRef" TEXT,
+    "npSenderWarehouseRef" TEXT,
+    "npSenderPhone" TEXT,
     "seoDefaultsJson" JSONB,
+    "themeJson" JSONB,
+    "onlinePaymentEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "returnWindowDays" INTEGER NOT NULL DEFAULT 14,
+    "returnsEnabled" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "StoreSettings_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Coupon" (
+    "id" SERIAL NOT NULL,
+    "code" TEXT NOT NULL,
+    "discountType" "CouponDiscountType" NOT NULL,
+    "discountValue" DOUBLE PRECISION NOT NULL,
+    "minSubtotal" DOUBLE PRECISION,
+    "maxUses" INTEGER,
+    "usedCount" INTEGER NOT NULL DEFAULT 0,
+    "expiresAt" TIMESTAMP(3),
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Coupon_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "StockNotification" (
+    "id" SERIAL NOT NULL,
+    "productId" INTEGER NOT NULL,
+    "email" TEXT NOT NULL,
+    "userId" INTEGER,
+    "notifiedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "StockNotification_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "NewsletterSubscriber" (
+    "id" SERIAL NOT NULL,
+    "email" TEXT NOT NULL,
+    "status" "NewsletterStatus" NOT NULL DEFAULT 'PENDING',
+    "token" TEXT NOT NULL,
+    "source" TEXT,
+    "confirmedAt" TIMESTAMP(3),
+    "unsubscribedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "NewsletterSubscriber_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "InstagramPost" (
+    "id" SERIAL NOT NULL,
+    "fileId" INTEGER NOT NULL,
+    "link" TEXT,
+    "isVideo" BOOLEAN NOT NULL DEFAULT false,
+    "likesCount" INTEGER,
+    "commentsCount" INTEGER,
+    "statsUpdatedAt" TIMESTAMP(3),
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "InstagramPost_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -464,6 +673,12 @@ CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "UserProviderAccount_provider_providerUserId_key" ON "UserProviderAccount"("provider", "providerUserId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "RefreshSession_tokenHash_key" ON "RefreshSession"("tokenHash");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PasswordResetToken_tokenHash_key" ON "PasswordResetToken"("tokenHash");
 
 -- CreateIndex
 CREATE INDEX "PasswordResetToken_userId_idx" ON "PasswordResetToken"("userId");
@@ -484,6 +699,9 @@ CREATE INDEX "Product_slug_idx" ON "Product"("slug");
 CREATE INDEX "Product_categoryId_idx" ON "Product"("categoryId");
 
 -- CreateIndex
+CREATE INDEX "ProductWearWith_productId_idx" ON "ProductWearWith"("productId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "ProductVariant_sku_key" ON "ProductVariant"("sku");
 
 -- CreateIndex
@@ -494,6 +712,9 @@ CREATE INDEX "ProductVariant_sku_idx" ON "ProductVariant"("sku");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "SizeChart_categoryId_key" ON "SizeChart"("categoryId");
+
+-- CreateIndex
+CREATE INDEX "ReviewMedia_reviewId_idx" ON "ReviewMedia"("reviewId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "PromoBlockProduct_promoBlockId_productId_key" ON "PromoBlockProduct"("promoBlockId", "productId");
@@ -544,7 +765,49 @@ CREATE INDEX "Order_createdAt_idx" ON "Order"("createdAt");
 CREATE INDEX "OrderItem_orderId_idx" ON "OrderItem"("orderId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "ReturnRequest_number_key" ON "ReturnRequest"("number");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequest_orderId_idx" ON "ReturnRequest"("orderId");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequest_userId_idx" ON "ReturnRequest"("userId");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequest_status_idx" ON "ReturnRequest"("status");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequestItem_returnRequestId_idx" ON "ReturnRequestItem"("returnRequestId");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequestItem_orderItemId_idx" ON "ReturnRequestItem"("orderItemId");
+
+-- CreateIndex
+CREATE INDEX "ReturnRequestPhoto_returnRequestId_idx" ON "ReturnRequestPhoto"("returnRequestId");
+
+-- CreateIndex
+CREATE INDEX "ReturnStatusHistory_returnRequestId_idx" ON "ReturnStatusHistory"("returnRequestId");
+
+-- CreateIndex
 CREATE INDEX "Expense_expenseDate_idx" ON "Expense"("expenseDate");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Coupon_code_key" ON "Coupon"("code");
+
+-- CreateIndex
+CREATE INDEX "Coupon_code_idx" ON "Coupon"("code");
+
+-- CreateIndex
+CREATE INDEX "StockNotification_productId_idx" ON "StockNotification"("productId");
+
+-- CreateIndex
+CREATE INDEX "StockNotification_notifiedAt_idx" ON "StockNotification"("notifiedAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "NewsletterSubscriber_email_key" ON "NewsletterSubscriber"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "NewsletterSubscriber_token_key" ON "NewsletterSubscriber"("token");
 
 -- AddForeignKey
 ALTER TABLE "User" ADD CONSTRAINT "User_avatarFileId_fkey" FOREIGN KEY ("avatarFileId") REFERENCES "FileAsset"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -577,6 +840,12 @@ ALTER TABLE "Product" ADD CONSTRAINT "Product_categoryId_fkey" FOREIGN KEY ("cat
 ALTER TABLE "Product" ADD CONSTRAINT "Product_hoverVideoFileId_fkey" FOREIGN KEY ("hoverVideoFileId") REFERENCES "FileAsset"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "ProductWearWith" ADD CONSTRAINT "ProductWearWith_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ProductWearWith" ADD CONSTRAINT "ProductWearWith_relatedProductId_fkey" FOREIGN KEY ("relatedProductId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "ProductVariant" ADD CONSTRAINT "ProductVariant_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -592,16 +861,31 @@ ALTER TABLE "SizeChart" ADD CONSTRAINT "SizeChart_categoryId_fkey" FOREIGN KEY (
 ALTER TABLE "FileAsset" ADD CONSTRAINT "FileAsset_previewFileId_fkey" FOREIGN KEY ("previewFileId") REFERENCES "FileAsset"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "ReviewLike" ADD CONSTRAINT "ReviewLike_reviewId_fkey" FOREIGN KEY ("reviewId") REFERENCES "Review"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReviewLike" ADD CONSTRAINT "ReviewLike_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReviewMedia" ADD CONSTRAINT "ReviewMedia_reviewId_fkey" FOREIGN KEY ("reviewId") REFERENCES "Review"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReviewMedia" ADD CONSTRAINT "ReviewMedia_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "FileAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "ProductMedia" ADD CONSTRAINT "ProductMedia_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "ProductMedia" ADD CONSTRAINT "ProductMedia_variantId_fkey" FOREIGN KEY ("variantId") REFERENCES "ProductVariant"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "ProductMedia" ADD CONSTRAINT "ProductMedia_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "FileAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ProductMedia" ADD CONSTRAINT "ProductMedia_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "FileAsset"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "HeroSlide" ADD CONSTRAINT "HeroSlide_mediaFileId_fkey" FOREIGN KEY ("mediaFileId") REFERENCES "FileAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PromoBlock" ADD CONSTRAINT "PromoBlock_imageFileId_fkey" FOREIGN KEY ("imageFileId") REFERENCES "FileAsset"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PromoBlockProduct" ADD CONSTRAINT "PromoBlockProduct_promoBlockId_fkey" FOREIGN KEY ("promoBlockId") REFERENCES "PromoBlock"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -644,3 +928,31 @@ ALTER TABLE "OrderItem" ADD CONSTRAINT "OrderItem_productVariantId_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "OrderStatusHistory" ADD CONSTRAINT "OrderStatusHistory_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequest" ADD CONSTRAINT "ReturnRequest_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequest" ADD CONSTRAINT "ReturnRequest_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequestItem" ADD CONSTRAINT "ReturnRequestItem_returnRequestId_fkey" FOREIGN KEY ("returnRequestId") REFERENCES "ReturnRequest"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequestItem" ADD CONSTRAINT "ReturnRequestItem_orderItemId_fkey" FOREIGN KEY ("orderItemId") REFERENCES "OrderItem"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequestPhoto" ADD CONSTRAINT "ReturnRequestPhoto_returnRequestId_fkey" FOREIGN KEY ("returnRequestId") REFERENCES "ReturnRequest"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnRequestPhoto" ADD CONSTRAINT "ReturnRequestPhoto_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "FileAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReturnStatusHistory" ADD CONSTRAINT "ReturnStatusHistory_returnRequestId_fkey" FOREIGN KEY ("returnRequestId") REFERENCES "ReturnRequest"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockNotification" ADD CONSTRAINT "StockNotification_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "InstagramPost" ADD CONSTRAINT "InstagramPost_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "FileAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+

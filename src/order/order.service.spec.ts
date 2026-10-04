@@ -68,7 +68,6 @@ describe('OrderService', () => {
     coupon = { validate: jest.fn(), redeem: jest.fn() };
     telegram = {
       sendOrderNotification: jest.fn(),
-      sendStatusChangeNotification: jest.fn(),
       sendLowStockNotification: jest.fn(),
     };
     email = { sendOrderConfirmationEmail: jest.fn(), sendOrderStatusEmail: jest.fn() };

@@ -2,9 +2,12 @@ import { Injectable } from '@nestjs/common';
 import {
   FeedbackStatus,
   OrderStatus,
+  ReturnStatus,
   ReviewStatus,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { DashboardCountersQueryDto } from './dto/dashboard-counters-query.dto';
 
 @Injectable()
 export class DashboardService {
@@ -37,8 +40,7 @@ export class DashboardService {
       newOrders,
       pendingReviews,
       newFeedback,
-      settings,
-      variants,
+      lowStockVariants,
       topProducts,
       recentOrders,
       monthExpenses,
@@ -52,13 +54,7 @@ export class DashboardService {
       this.prisma.order.count({ where: { status: OrderStatus.NEW, archivedAt: null } }),
       this.prisma.review.count({ where: { status: ReviewStatus.PENDING } }),
       this.prisma.feedback.count({ where: { status: FeedbackStatus.NEW, deletedAt: null } }),
-      this.prisma.storeSettings.findFirst({
-        select: { defaultLowStockThreshold: true },
-      }),
-      this.prisma.productVariant.findMany({
-        where: { isActive: true, deletedAt: null, product: { deletedAt: null } },
-        select: { stockQty: true, reservedQty: true },
-      }),
+      this.countLowStockVariants(),
       this.prisma.orderItem.groupBy({
         by: ['productName'],
         where: {
@@ -97,7 +93,6 @@ export class DashboardService {
     ]);
 
     const expenses = monthExpenses._sum.amount ?? 0;
-    const threshold = settings?.defaultLowStockThreshold ?? 3;
 
     return {
       today,
@@ -120,9 +115,7 @@ export class DashboardService {
         newOrders,
         pendingReviews,
         newFeedback,
-        lowStockVariants: variants.filter(
-          (variant) => variant.stockQty - variant.reservedQty <= threshold,
-        ).length,
+        lowStockVariants,
       },
       orderStatuses: Object.fromEntries(
         orderStatuses.map((item) => [item.status, item._count._all]),
@@ -134,6 +127,36 @@ export class DashboardService {
       })),
       recentOrders,
     };
+  }
+
+  /**
+   * Лічильники «потребує уваги» для меню адмінки — одним запитом.
+   * Замовлення/звернення/повернення — за статусом «нове»; відгуки й користувачі — створені після мітки
+   * «востаннє переглянуто» розділ (відповіді самих адмінів не рахуються).
+   */
+  async getCounters(query: DashboardCountersQueryDto) {
+    const after = (iso?: string) => (iso ? { gt: new Date(iso) } : undefined);
+    const [newOrders, newReviews, newFeedback, newReturns, newUsers, lowStockVariants] = await Promise.all([
+      this.prisma.order.count({ where: { status: OrderStatus.NEW, archivedAt: null } }),
+      this.prisma.review.count({ where: { createdAt: after(query.reviewsSince), user: { role: { not: UserRole.ADMIN } } } }),
+      this.prisma.feedback.count({ where: { status: FeedbackStatus.NEW, deletedAt: null } }),
+      this.prisma.returnRequest.count({ where: { status: ReturnStatus.NEW } }),
+      this.prisma.user.count({ where: { createdAt: after(query.usersSince), role: { not: UserRole.ADMIN } } }),
+      this.countLowStockVariants(),
+    ]);
+    return { newOrders, newReviews, newFeedback, newReturns, newUsers, lowStockVariants };
+  }
+
+  private async countLowStockVariants() {
+    const [settings, variants] = await Promise.all([
+      this.prisma.storeSettings.findFirst({ select: { defaultLowStockThreshold: true } }),
+      this.prisma.productVariant.findMany({
+        where: { isActive: true, deletedAt: null, product: { deletedAt: null } },
+        select: { stockQty: true, reservedQty: true },
+      }),
+    ]);
+    const threshold = settings?.defaultLowStockThreshold ?? 3;
+    return variants.filter((variant) => variant.stockQty - variant.reservedQty <= threshold).length;
   }
 
   private async getPeriodMetrics(dateFrom: Date, dateTo: Date) {

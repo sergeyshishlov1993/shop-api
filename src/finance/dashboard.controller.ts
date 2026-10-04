@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import {
   ApiOperation,
   ApiResponse,
@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, SwaggerJwtAuth } from '../common/decorators';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { DashboardService } from './dashboard.service';
+import { DashboardCountersQueryDto } from './dto/dashboard-counters-query.dto';
 
 @ApiTags('Admin — Дашборд')
 @Controller('admin/dashboard')
@@ -62,5 +63,27 @@ export class DashboardController {
   })
   getDashboard() {
     return this.dashboardService.getDashboard();
+  }
+
+  @Get('counters')
+  @ApiOperation({
+    summary: 'Лічильники для меню адмінки',
+    description: `**Доступ:** ADMIN
+
+**Зачем:** бейджі «потребує уваги» біля пунктів меню і блок на дашборді — одним легким запитом.
+
+**Query:** \`reviewsSince\`, \`usersSince\` — ISO-мітки «востаннє переглянуто розділ»; без мітки рахуються всі.
+
+**Ответ:** \`{ newOrders, newReviews, newFeedback, newReturns, newUsers, lowStockVariants }\`
+- newOrders — статус NEW, без архівних
+- newReviews — після reviewsSince, без відповідей адмінів
+- newFeedback — звернення зі статусом NEW
+- newReturns — заявки на повернення зі статусом NEW
+- newUsers — зареєстровані після usersSince (без адмінів)
+- lowStockVariants — варіанти з залишком ≤ порогу`,
+  })
+  @ApiResponse({ status: 200, description: 'Лічильники.' })
+  getCounters(@Query() query: DashboardCountersQueryDto) {
+    return this.dashboardService.getCounters(query);
   }
 }

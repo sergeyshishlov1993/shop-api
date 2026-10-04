@@ -82,24 +82,6 @@ export class TelegramService {
     await this.sendMessage(text, 'notifyOnNewOrder');
   }
 
-  async sendStatusChangeNotification(data: {
-    orderNumber: string;
-    oldStatus: string;
-    newStatus: string;
-  }): Promise<void> {
-    const orderNumber = this.escapeHtml(data.orderNumber);
-    const oldStatus = this.escapeHtml(data.oldStatus);
-    const newStatus = this.escapeHtml(data.newStatus);
-
-    const text = `
-🔄 <b>Зміна статусу замовлення</b>
-📦 Замовлення: ${orderNumber}
-Статус змінено: <b>${oldStatus}</b> ➡️ <b>${newStatus}</b>
-    `.trim();
-
-    await this.sendMessage(text, 'notifyOnNewOrder');
-  }
-
   async sendNewReviewNotification(data: {
     productName: string;
     rating: number;

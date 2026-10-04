@@ -642,12 +642,6 @@ export class OrderService {
             });
         });
 
-        await this.telegramService.sendStatusChangeNotification({
-            orderNumber: updatedOrder.orderNumber,
-            oldStatus: existingOrder.status,
-            newStatus: updatedOrder.status,
-        });
-
         if (updatedOrder.customerEmail) {
             await this.emailService.sendOrderStatusEmail({
                 email: updatedOrder.customerEmail,

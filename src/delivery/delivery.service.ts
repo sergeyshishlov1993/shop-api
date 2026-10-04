@@ -13,6 +13,12 @@ interface NovaPoshtaTrackingResponse {
         Number: string;
         StatusCode: string;
         Status: string;
+        CitySender?: string;
+        CityRecipient?: string;
+        WarehouseRecipient?: string;
+        DateCreated?: string;
+        ScheduledDeliveryDate?: string;
+        ActualDeliveryDate?: string;
     }>;
 }
 
@@ -25,7 +31,25 @@ export interface TrackingInfo {
     ttn: string;
     statusCode: string;
     statusDescription: string;
+    citySender?: string;
+    cityRecipient?: string;
+    warehouseRecipient?: string;
+    dateCreated?: string;
+    scheduledDeliveryDate?: string;
+    actualDeliveryDate?: string;
 }
+
+const toTrackingInfo = (data: NovaPoshtaTrackingResponse['data'][number]): TrackingInfo => ({
+    ttn: data.Number,
+    statusCode: data.StatusCode,
+    statusDescription: data.Status,
+    citySender: data.CitySender || undefined,
+    cityRecipient: data.CityRecipient || undefined,
+    warehouseRecipient: data.WarehouseRecipient || undefined,
+    dateCreated: data.DateCreated || undefined,
+    scheduledDeliveryDate: data.ScheduledDeliveryDate || undefined,
+    actualDeliveryDate: data.ActualDeliveryDate || undefined,
+});
 
 @Injectable()
 export class DeliveryService {
@@ -37,6 +61,31 @@ export class DeliveryService {
         private readonly prisma: PrismaService,
     ) {
         this.envApiKey = this.configService.get<string>('NOVA_POSHTA_API_KEY', '');
+    }
+
+    // Тестові ТТН для розробки: TEST<код статусу НП> (TEST5, TEST7, TEST9, TEST102…) — без звернення до API НП
+    private fakeTracking(ttn: string): TrackingInfo | null {
+        const code = /^TEST(\d+)$/.exec(String(ttn).trim())?.[1];
+        if (!code || this.configService.get('NODE_ENV') === 'production') return null;
+        const descriptions: Record<string, string> = {
+            1: 'Нова пошта очікує надходження від відправника',
+            5: 'Відправлення прямує до міста Київ',
+            6: 'Відправлення у місті Київ',
+            7: 'Відправлення прибуло у відділення №5',
+            9: 'Відправлення отримано',
+            102: 'Відмова одержувача',
+        };
+        return {
+            ttn: `TEST${code}`,
+            statusCode: code,
+            statusDescription: descriptions[code] ?? `Тестовий статус ${code}`,
+            citySender: 'Харків',
+            cityRecipient: 'Київ',
+            warehouseRecipient: 'Відділення №5: вул. Хрещатик, 1',
+            dateCreated: '03.10.2026',
+            scheduledDeliveryDate: '05.10.2026',
+            actualDeliveryDate: code === '9' ? '04.10.2026' : undefined,
+        };
     }
 
     private async getApiKey(): Promise<string> {
@@ -100,6 +149,9 @@ export class DeliveryService {
     }
 
     async getTrackingInfo(ttn: string): Promise<TrackingInfo | null> {
+        const fake = this.fakeTracking(ttn);
+        if (fake) return fake;
+
         try {
             const response = await fetch(this.apiUrl, {
                 method: 'POST',
@@ -117,12 +169,7 @@ export class DeliveryService {
             const result: NovaPoshtaTrackingResponse = await response.json();
 
             if (result.success && result.data.length > 0) {
-                const data = result.data[0];
-                return {
-                    ttn: data.Number,
-                    statusCode: data.StatusCode,
-                    statusDescription: data.Status,
-                };
+                return toTrackingInfo(result.data[0]);
             }
 
             return null;
@@ -136,6 +183,10 @@ export class DeliveryService {
         if (!ttnList || ttnList.length === 0) {
             return [];
         }
+
+        const fakes = ttnList.map((ttn) => this.fakeTracking(ttn)).filter((info): info is TrackingInfo => info !== null);
+        ttnList = ttnList.filter((ttn) => !this.fakeTracking(ttn));
+        if (ttnList.length === 0) return fakes;
 
         try {
             const response = await fetch(this.apiUrl, {
@@ -153,16 +204,10 @@ export class DeliveryService {
 
             const result: NovaPoshtaTrackingResponse = await response.json();
 
-            return result.success
-                ? result.data.map((data) => ({
-                    ttn: data.Number,
-                    statusCode: data.StatusCode,
-                    statusDescription: data.Status,
-                }))
-                : [];
+            return [...fakes, ...(result.success ? result.data.map(toTrackingInfo) : [])];
         } catch (error) {
             console.error('[NovaPoshta] Error multiple tracking:', error);
-            return [];
+            return fakes;
         }
     }
 

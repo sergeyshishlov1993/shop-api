@@ -49,7 +49,7 @@ export class DashboardService {
       this.getPeriodMetrics(previousWeek, weekStart),
       this.getPeriodMetrics(monthStart, nextMonth),
       this.getPeriodMetrics(previousMonth, monthStart),
-      this.prisma.order.count({ where: { status: OrderStatus.NEW } }),
+      this.prisma.order.count({ where: { status: OrderStatus.NEW, archivedAt: null } }),
       this.prisma.review.count({ where: { status: ReviewStatus.PENDING } }),
       this.prisma.feedback.count({ where: { status: FeedbackStatus.NEW, deletedAt: null } }),
       this.prisma.storeSettings.findFirst({
@@ -64,6 +64,7 @@ export class DashboardService {
         where: {
           order: {
             status: OrderStatus.DELIVERED,
+            archivedAt: null,
             createdAt: { gte: weekStart, lt: nextWeek },
           },
         },
@@ -72,6 +73,7 @@ export class DashboardService {
         take: 5,
       }),
       this.prisma.order.findMany({
+        where: { archivedAt: null },
         orderBy: { createdAt: 'desc' },
         take: 5,
         select: {
@@ -89,6 +91,7 @@ export class DashboardService {
       }),
       this.prisma.order.groupBy({
         by: ['status'],
+        where: { archivedAt: null },
         _count: { _all: true },
       }),
     ]);
@@ -136,11 +139,12 @@ export class DashboardService {
   private async getPeriodMetrics(dateFrom: Date, dateTo: Date) {
     const [ordersCount, delivered] = await Promise.all([
       this.prisma.order.count({
-        where: { createdAt: { gte: dateFrom, lt: dateTo } },
+        where: { archivedAt: null, createdAt: { gte: dateFrom, lt: dateTo } },
       }),
       this.prisma.order.aggregate({
         where: {
           status: OrderStatus.DELIVERED,
+          archivedAt: null,
           createdAt: { gte: dateFrom, lt: dateTo },
         },
         _count: { _all: true },

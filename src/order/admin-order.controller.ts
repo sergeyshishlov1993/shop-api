@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, SwaggerJwtAuth } from '../common/decorators';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { AdminOrderQueryDto } from './dto/admin-order-query.dto';
+import { ArchiveOrderDto } from './dto/archive-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrderService } from './order.service';
@@ -241,6 +242,27 @@ export class AdminOrderController {
         @Body() dto: UpdateOrderDto,
     ) {
         return this.orderService.updateAdminOrder(id, dto);
+    }
+
+    @Patch(':id/archive')
+    @ApiOperation({
+        summary: 'Архівувати / відновити заказ',
+        description: `**Доступ:** ADMIN
+
+**Зачем:** прибрати непотрібні (тестові, дублі) заказы без видалення.
+
+**Тело:** \`{ archived: true }\` — в архів, \`{ archived: false }\` — відновити.
+
+**Бизнес-логика:** архівний заказ не показується в списку (лише з \`archived=true\`) і не враховується в дашборді та звітах. У кабінеті покупця він лишається.`,
+    })
+    @ApiParam({ name: 'id', description: 'Идентификатор заказа', example: 1 })
+    @ApiResponse({ status: 200, description: '{ id, archivedAt }' })
+    @ApiResponse({ status: 404, description: 'Заказ не найден.' })
+    archiveOrder(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ArchiveOrderDto,
+    ) {
+        return this.orderService.setOrderArchived(id, dto.archived);
     }
 
     @Post(':id/ttn')

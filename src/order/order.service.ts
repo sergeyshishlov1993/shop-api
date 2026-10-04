@@ -352,6 +352,7 @@ export class OrderService {
         const where: Prisma.OrderWhereInput = {
             status: query.status,
             userId: query.userId,
+            archivedAt: query.archived ? { not: null } : null,
         };
 
         if (query.search) {
@@ -668,6 +669,18 @@ export class OrderService {
         }
 
         return updatedOrder;
+    }
+
+    async setOrderArchived(id: number, archived: boolean) {
+        const existingOrder = await this.prisma.order.findUnique({ where: { id }, select: { id: true } });
+        if (!existingOrder) {
+            throw new NotFoundException('Order not found');
+        }
+        return this.prisma.order.update({
+            where: { id },
+            data: { archivedAt: archived ? new Date() : null },
+            select: { id: true, archivedAt: true },
+        });
     }
 
     async updateAdminOrder(id: number, dto: UpdateOrderDto) {

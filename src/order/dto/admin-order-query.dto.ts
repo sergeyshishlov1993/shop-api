@@ -1,11 +1,17 @@
-import { Type } from 'class-transformer';
-import { IsEnum, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { OrderStatus } from '@prisma/client';
 
 export class AdminOrderQueryDto {
     @IsOptional()
     @IsEnum(OrderStatus)
     status?: OrderStatus;
+
+    /** true — лише архівні; за замовчуванням архівні приховані */
+    @IsOptional()
+    @IsBoolean()
+    @Transform(({ value }) => value === 'true' || value === true)
+    archived?: boolean;
 
     @IsOptional()
     @Type(() => Number)

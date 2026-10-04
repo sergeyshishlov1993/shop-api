@@ -41,7 +41,7 @@ export class ReportService {
     }
 
     const orders = await this.prisma.order.findMany({
-      where: { status: { in: orderStatuses }, createdAt: { gte: dateFromParsed, lte: dateToParsed } },
+      where: { status: { in: orderStatuses }, archivedAt: null, createdAt: { gte: dateFromParsed, lte: dateToParsed } },
       include: {
         items: {
           ...(hasItemFilters ? { where: orderItemWhere } : {}),
